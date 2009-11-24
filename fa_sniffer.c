@@ -56,7 +56,6 @@ struct fa_sniffer_data {
     struct class * class;       // Device class
     struct device * device;     // Parent device
 
-    u8 irq_line;
     struct x5pcie_dma_registers * bar0;
 };
 
@@ -102,6 +101,7 @@ static int fa_sniffer_open(struct inode *inode, struct file *file)
     file->private_data = fa_sniffer;
     return 0;
 }
+
 
 static ssize_t fa_sniffer_read(
     struct file *file, char *buf, size_t count, loff_t *f_pos)
@@ -222,12 +222,13 @@ static int fa_sniffer_enable(
     
     pci_set_master(dev);
 
+    
+    /* Enable MSI (message based interrupts) and use the currently allocated
+     * pci_dev irq. */
     rc = pci_enable_msi(dev);
     TEST_RC(rc, no_msi, "Unable to enable MSI");
-    rc = pci_read_config_byte(dev, PCI_INTERRUPT_LINE, &fa_sniffer->irq_line);
-    TEST_RC(rc, no_irq_line, "Unable to read PCI_INTERRUPT_LINE");
     rc = request_irq(
-        fa_sniffer->irq_line, fa_sniffer_irq,
+        dev->irq, fa_sniffer_irq,
         IRQF_SHARED, "fa_sniffer", fa_sniffer);
     TEST_RC(rc, no_irq, "Unable to request irq");
     
@@ -238,15 +239,20 @@ static int fa_sniffer_enable(
     
     return 0;
 
-    free_irq(fa_sniffer->irq_line, fa_sniffer);
+
+    
+//    pci_iounmap(dev, fa_sniffer->bar0);
+no_bar:
+
+    free_irq(dev->irq, fa_sniffer);
 no_irq:
-no_irq_line:
+
     pci_disable_msi(dev);
 no_msi:
-    pci_iounmap(dev, fa_sniffer->bar0);
-no_bar:
+
     pci_release_regions(dev);
 no_regions:
+
     pci_disable_device(dev);
 no_device:
     return rc;
@@ -255,7 +261,7 @@ no_device:
 static void fa_sniffer_disable(
     struct pci_dev *dev, struct fa_sniffer_data *fa_sniffer)
 {
-    free_irq(fa_sniffer->irq_line, fa_sniffer);
+    free_irq(dev->irq, fa_sniffer);
     pci_disable_msi(dev);
     pci_iounmap(dev, fa_sniffer->bar0);
     pci_release_regions(dev);
