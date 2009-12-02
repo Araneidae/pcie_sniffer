@@ -9,6 +9,7 @@
 #include <linux/string.h>   // memset, testing only.
 #include <linux/delay.h>
 
+#include <asm/semaphore.h>
 
 /* Xilinx vendor id. */
 #define XILINX_VID      0x10EE
@@ -40,26 +41,24 @@ struct x5pcie_dma_registers {
     u32 dlwstat;      /** 0x3C Device Link Width Status*/
     u32 dltrsstat;    /** 0x40 Device Link Transaction Size Status */
     u32 dmisccont;    /** 0x44 Device Miscellaneous Control */
-    u32 ccfaicfgval;    /* Ox48 CC FAI configuration register */
-    u32 ccfaiirqclr;    /* 0x4C CC FAI interrupt clear register */
+    u32 ccfaicfgval;  /** Ox48 CC FAI configuration register */
+    u32 ccfaiirqclr;  /** 0x4C CC FAI interrupt clear register */
+    u32 wdmairqperf;  /** 0x50 WDMA Irq Timer */
 };
 
-
 #define BAR0_LEN    8192
-
-
-
 
 /* Device specific data. */
 struct fa_sniffer_data {
     struct cdev cdev;           // Character device
     struct class * class;       // Device class
     struct device * device;     // Parent device
-
     struct x5pcie_dma_registers * bar0;
 };
 
+static struct semaphore sem;
 
+bool sw = false;
 
 #define TEST_(test, rc, err, target, message) \
     do if (test) \
@@ -110,58 +109,109 @@ static ssize_t fa_sniffer_read(
         (struct fa_sniffer_data *) file->private_data;
     struct x5pcie_dma_registers *regs = fa_sniffer->bar0;
 
-    if (count > PAGE_SIZE)   count = PAGE_SIZE;
-    if (count != PAGE_SIZE)
+    u32 i;
+
+    sema_init(&sem, 0); // init_MUTEX_LOCKED
+
+    /* Individual buffer size is set to max 128KB. It can hold
+     * 64 frames
+     */
+    u32 dwSize = 64*2048;
+    u32 dwLen = count/dwSize;
+
+/*
+    if (count > dwLen*dwSize)
+        count = dwLen*dwSize;
+    if (count != dwLen*dwSize)
         return -EFBIG;
+*/
 
-    void * buffer = kmalloc(PAGE_SIZE, GFP_KERNEL | __GFP_COLD);
-    TEST_PTR(count, buffer, no_buffer, "oh dear oh dear oh dear");
+    /* Buffer-A Allocation */
+    void * bufferA = kmalloc(dwSize, GFP_KERNEL | __GFP_COLD);
+    TEST_PTR(dwSize, bufferA, no_buffer, "oh dear oh dear oh dear");
 
-    memset(buffer, 0, PAGE_SIZE);       // for the moment
+    memset(bufferA, 0, dwSize);       // for the moment
 
-    
-    dma_addr_t dma_addr = dma_map_single(
-        fa_sniffer->device, buffer, PAGE_SIZE, DMA_FROM_DEVICE);
-    TEST_(dma_addr == 0, count, -ENOMEM, no_dma_addr,
-        "Unable to map DMA buffer");
+    dma_addr_t dma_addrA = dma_map_single(
+        fa_sniffer->device, bufferA, dwSize, DMA_FROM_DEVICE);
+    TEST_(dma_addrA == 0, dwSize, -ENOMEM, no_dma_addr,
+        "Unable to map DMA bufferA");
 
+    /* Buffer-B Allocation */
+    void * bufferB = kmalloc(dwSize, GFP_KERNEL | __GFP_COLD);
+    TEST_PTR(dwSize, bufferB, no_buffer, "oh dear oh dear oh dear");
+
+    memset(bufferB, 0, dwSize);       // for the moment
+
+    dma_addr_t dma_addrB = dma_map_single(
+        fa_sniffer->device, bufferB, dwSize, DMA_FROM_DEVICE);
+    TEST_(dma_addrB == 0, dwSize, -ENOMEM, no_dma_addr,
+        "Unable to map DMA bufferA");
+
+    /* Prepare DMA Registers */
     int wSize = 32;
     int wCount = 16;
     int bTrafficClass = 0;
     int fEnable64bit = 1;
-    u32 tlps =
+
+    u32 wtlps =
         (wSize & 0x1FFF) | ((bTrafficClass & 0x7) << 16) |
         ((fEnable64bit & 1) << 19) |
-        ((u32) (dma_addr >> 32) << 24);
+        ((u32) (dma_addrA >> 32) << 24);
+
+    u32 rtlps =
+        (wSize & 0x1FFF) | ((bTrafficClass & 0x7) << 16) |
+        ((fEnable64bit & 1) << 19) |
+        ((u32) (dma_addrB >> 32) << 24);
 
     writel(1, &regs->dcsr);
     writel(0, &regs->dcsr);
-    writel((u32)dma_addr, &regs->wdmatlpa);
-    writel(tlps, &regs->wdmatlps);
+    writel((u32)dma_addrA, &regs->wdmatlpa);
+    writel((u32)dma_addrB, &regs->rdmatlpa);
+    writel(wtlps, &regs->wdmatlps);
+    writel(rtlps, &regs->rdmatlps);
     writel(wCount, &regs->wdmatlpc);
 
-    writel(2, &regs->wdmatlpp);
+    writel((dwLen << 16) | (dwSize/2048), &regs->wdmatlpp);
 
     writel(1, &regs->ddmacr);
 
-    
-    // DMA happens here
-    msleep(200);
-    
-    dma_unmap_single(fa_sniffer->device, dma_addr, PAGE_SIZE, DMA_FROM_DEVICE);
+    /* and now wait for interrupt (release) */
+//    msleep(200);
 
-//
-    
-    if (copy_to_user(buf, buffer, count) != 0)
+    for (i=0; i<dwLen; i++) {
+        down(&sem);
+
+        if (sw) {
+            if (copy_to_user(buf + (i*dwSize), bufferA, dwSize) != 0)
+            count = -EFAULT;
+        }
+        else {
+            if (copy_to_user(buf + (i*dwSize), bufferB, dwSize) != 0)
+            count = -EFAULT;
+        }
+    }
+
+    printk(KERN_ERR "Buffers are copied.\n");
+
+/*
+    dma_unmap_single(fa_sniffer->device, dma_addrA, dwSize, DMA_FROM_DEVICE);
+    dma_unmap_single(fa_sniffer->device, dma_addrB, dwSize, DMA_FROM_DEVICE);
+*/
+
+/*
+    if (copy_to_user(buf, bufferA, dwSize) != 0)
         count = -EFAULT;
-
+    if (copy_to_user(buf+dwSize, bufferB, dwSize) != 0)
+        count = -EFAULT;
+*/
 
 no_dma_addr:
-    kfree(buffer);
+    kfree(bufferA);
 
 no_buffer:
     return count;
-    
+
 //     if (*f_pos >= BAR0_LEN)
 //         return 0;
 //     else
@@ -181,7 +231,6 @@ no_buffer:
 //     }
 }
 
-
 static struct file_operations fa_sniffer_fops = {
     .owner = THIS_MODULE,
     .open = fa_sniffer_open,
@@ -189,17 +238,16 @@ static struct file_operations fa_sniffer_fops = {
     .read = fa_sniffer_read
 };
 
-
-
-
 static irqreturn_t fa_sniffer_irq(
     int irq, void * dev_id, struct pt_regs *pt_regs)
 {
     struct fa_sniffer_data *fa_sniffer = (struct fa_sniffer_data *) dev_id;
     struct x5pcie_dma_registers *regs = fa_sniffer->bar0;
-
+    regs->ccfaiirqclr = 0;
+    sw = !sw;
+    up(&sem);
     printk(KERN_ERR "fa_sniffer interrupt %p\n", dev_id);
-    regs->ddmacr = 0;
+//    printk(KERN_ERR "fa_sniffer interrupt %d\n", regs->wdmairqperf);
     return IRQ_HANDLED;
 }
 
@@ -219,10 +267,9 @@ static int fa_sniffer_enable(
     TEST_RC(rc, no_device, "Unable to enable device");
     rc = pci_request_regions(dev, "fa_sniffer");
     TEST_RC(rc, no_regions, "Unable to reserve resources");
-    
+
     pci_set_master(dev);
 
-    
     /* Enable MSI (message based interrupts) and use the currently allocated
      * pci_dev irq. */
     rc = pci_enable_msi(dev);
@@ -231,19 +278,13 @@ static int fa_sniffer_enable(
         dev->irq, fa_sniffer_irq,
         IRQF_SHARED, "fa_sniffer", fa_sniffer);
     TEST_RC(rc, no_irq, "Unable to request irq");
-    
 
     fa_sniffer->bar0 = get_bar(dev, 0, BAR0_LEN);
     TEST_PTR(rc, fa_sniffer->bar0, no_bar, "Cannot find registers");
 
-    
     return 0;
 
-
-    
-//    pci_iounmap(dev, fa_sniffer->bar0);
 no_bar:
-
     free_irq(dev->irq, fa_sniffer);
 no_irq:
 
@@ -278,7 +319,7 @@ static int __devinit fa_sniffer_probe(
     TEST_PTR(rc, fa_sniffer, no_memory, "Unable to allocate memory");
     dev->dev.driver_data = fa_sniffer;
     fa_sniffer->device = &dev->dev;
-    
+
     rc = fa_sniffer_enable(dev, fa_sniffer);
     if (rc < 0)
         goto no_sniffer;
@@ -286,12 +327,12 @@ static int __devinit fa_sniffer_probe(
     dev_t devt;
     rc = alloc_chrdev_region(&devt, 0, 1, "fa_sniffer");
     TEST_RC(rc, no_chrdev, "Unable to allocate device");
-    
+
     cdev_init(&fa_sniffer->cdev, &fa_sniffer_fops);
     fa_sniffer->cdev.owner = THIS_MODULE;
     rc = cdev_add(&fa_sniffer->cdev, devt, 1);
     TEST_RC(rc, no_cdev, "Unable to register device");
-        
+
     fa_sniffer->class = class_create(THIS_MODULE, "fa_sniffer");
     TEST_PTR(rc, fa_sniffer->class, no_class, "Unable to create class");
 
@@ -321,7 +362,7 @@ static void __devexit fa_sniffer_remove(struct pci_dev *dev)
     struct fa_sniffer_data *fa_sniffer =
         (struct fa_sniffer_data *) dev->dev.driver_data;
     dev_t devt = fa_sniffer->cdev.dev;
-    
+
     device_destroy(fa_sniffer->class, devt);
     class_destroy(fa_sniffer->class);
     cdev_del(&fa_sniffer->cdev);

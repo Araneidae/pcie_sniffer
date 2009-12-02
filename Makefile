@@ -19,5 +19,5 @@ clean:
 
 test: # all
 	sudo /sbin/insmod ./fa_sniffer.ko
-	sudo dd if=/dev/fa_sniffer bs=4096 count=1 | hexdump -C
+	sudo dd if=/dev/fa_sniffer bs=$(SIZE) count=1 > myfile.bin
 	sudo /sbin/rmmod ./fa_sniffer.ko
