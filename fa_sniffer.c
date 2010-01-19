@@ -41,8 +41,9 @@ struct x5pcie_dma_registers {
     u32 dlwstat;      /** 0x3C Device Link Width Status*/
     u32 dltrsstat;    /** 0x40 Device Link Transaction Size Status */
     u32 dmisccont;    /** 0x44 Device Miscellaneous Control */
+    u32 ccfaiirqclr;  /** 0x48 CC FAI interrupt clear register */
+    u32 dummy[13];    /** 0x4C-0x80 Reserved Address Space */
     u32 ccfaicfgval;  /** Ox48 CC FAI configuration register */
-    u32 ccfaiirqclr;  /** 0x4C CC FAI interrupt clear register */
     u32 wdmairqperf;  /** 0x50 WDMA Irq Timer */
 };
 
@@ -93,6 +94,85 @@ bool sw = false;
     TEST_(IS_ERR(ptr) < 0, rc, PTR_ERR(ptr), target, message)
 
 
+static u32 code2size(char bCode)
+{
+    if (bCode > 0x05)
+        return 0;
+    return (u32)(128 << bCode);
+}
+
+static int DMAGetMaxPacketSize(struct x5pcie_dma_registers *regs)
+{
+    u32 dltrsstat;
+    u32 wMaxCapPayload;
+    u32 wMaxProgPayload;
+
+    /* Read encoded max payload sizes */
+    dltrsstat = regs->dltrsstat;
+    /* Convert encoded max payload sizes into byte count */
+    /* bits [2:0] : Capability maximum payload size for the device */
+    wMaxCapPayload = code2size((char)(dltrsstat & 0x7));
+    /* bits [10:8] : Programmed maximum payload size for the device */
+    wMaxProgPayload = code2size((char)((dltrsstat >> 8) & 0x7));
+
+    if (wMaxCapPayload < wMaxProgPayload)
+        return wMaxCapPayload;
+    else
+        return wMaxProgPayload;
+}
+
+/* Prepares FA Sniffer card to perform DMA. */
+static int prepare_dma(struct x5pcie_dma_registers *regs, u32 bufSize, dma_addr_t dma_addrA, dma_addr_t dma_addrB, u32 swCount)
+{
+    /* Prepare DMA Registers */
+
+    /* Get Maximum TLP size and compute how many TLPs are required for one
+     * frame of 2048 bytes
+     */
+    int wSize = DMAGetMaxPacketSize(regs)/4; // converted to DWORDs
+    int wCount = 2048/wSize;                 // # of TLPs required for a frame
+    int bTrafficClass = 0;  // Default Memory Write TLP Traffic Class
+    int fEnable64bit = 1;   // Enable 64b Memroy Write TLP Generation
+
+    /*
+     * The register structure below may seem a bit awkward, but it is kept
+     * like this to be register-compatible with Xilinx reference design (xapp1052).
+     */
+
+    // Prepare Buffer-A TLP Size & Upper Address
+    u32 wtlps =
+        (wSize & 0x1FFF) | ((bTrafficClass & 0x7) << 16) |
+        ((fEnable64bit & 1) << 19) |
+        ((u32) (dma_addrA >> 32) << 24);
+    // Prepare Buffer-B TLP Size & Upper Address
+    u32 rtlps =
+        (wSize & 0x1FFF) | ((bTrafficClass & 0x7) << 16) |
+        ((fEnable64bit & 1) << 19) |
+        ((u32) (dma_addrB >> 32) << 24);
+
+    // Write Buffer-A&B Lower DMA Address
+    writel((u32)dma_addrA, &regs->wdmatlpa);
+    writel((u32)dma_addrB, &regs->rdmatlpa);
+
+    // Write Buffer-A&B Upper DMA Address
+    writel(wtlps, &regs->wdmatlps);
+    writel(rtlps, &regs->rdmatlps);
+
+    // Memory Write TLP Count (for one frame)
+    writel(wCount, &regs->wdmatlpc);
+
+    // Switch count, and
+    // Buffer length in terms of number of 2K frames
+    writel((swCount << 16) | (bufSize/2048), &regs->wdmatlpp);
+
+    // Assert Initiator Reset
+    writel(1, &regs->dcsr);
+    writel(0, &regs->dcsr);
+
+    return 0;
+}
+
+
 static int fa_sniffer_open(struct inode *inode, struct file *file)
 {
     struct fa_sniffer_data *fa_sniffer =
@@ -113,96 +193,76 @@ static ssize_t fa_sniffer_read(
 
     sema_init(&sem, 0); // init_MUTEX_LOCKED
 
-    /* Individual buffer size is set to max 128KB. It can hold
-     * 64 frames
+    /* Buffer size is set to max 128KB. It can hold 64 frames */
+    u32 bufSize = 64*2048;
+    /* Compute how many times buffers are going to be switched based on 
+     * how many frames user wants to capture
      */
-    u32 dwSize = 64*2048;
-    u32 dwLen = count/dwSize;
+    u32 swCount = count / bufSize;
 
 /*
-    if (count > dwLen*dwSize)
-        count = dwLen*dwSize;
-    if (count != dwLen*dwSize)
+    if (count > swCount*bufSize)
+        count = swCount*bufSize;
+    if (count != swCount*bufSize)
         return -EFBIG;
 */
 
     /* Buffer-A Allocation */
-    void * bufferA = kmalloc(dwSize, GFP_KERNEL | __GFP_COLD);
-    TEST_PTR(dwSize, bufferA, no_buffer, "oh dear oh dear oh dear");
+    void * bufferA = kmalloc(bufSize, GFP_KERNEL | __GFP_COLD);
+    TEST_PTR(bufSize, bufferA, no_buffer, "oh dear oh dear oh dear");
 
-    memset(bufferA, 0, dwSize);       // for the moment
+    memset(bufferA, 0, bufSize);       // for the moment
 
     dma_addr_t dma_addrA = dma_map_single(
-        fa_sniffer->device, bufferA, dwSize, DMA_FROM_DEVICE);
-    TEST_(dma_addrA == 0, dwSize, -ENOMEM, no_dma_addr,
+        fa_sniffer->device, bufferA, bufSize, DMA_FROM_DEVICE);
+    TEST_(dma_addrA == 0, bufSize, -ENOMEM, no_dma_addr,
         "Unable to map DMA bufferA");
 
     /* Buffer-B Allocation */
-    void * bufferB = kmalloc(dwSize, GFP_KERNEL | __GFP_COLD);
-    TEST_PTR(dwSize, bufferB, no_buffer, "oh dear oh dear oh dear");
+    void * bufferB = kmalloc(bufSize, GFP_KERNEL | __GFP_COLD);
+    TEST_PTR(bufSize, bufferB, no_buffer, "oh dear oh dear oh dear");
 
-    memset(bufferB, 0, dwSize);       // for the moment
+    memset(bufferB, 0, bufSize);       // for the moment
 
     dma_addr_t dma_addrB = dma_map_single(
-        fa_sniffer->device, bufferB, dwSize, DMA_FROM_DEVICE);
-    TEST_(dma_addrB == 0, dwSize, -ENOMEM, no_dma_addr,
+        fa_sniffer->device, bufferB, bufSize, DMA_FROM_DEVICE);
+    TEST_(dma_addrB == 0, bufSize, -ENOMEM, no_dma_addr,
         "Unable to map DMA bufferA");
 
+    /* Re-start CC */
+    writel(0x0, &regs->ccfaicfgval);
+    writel(0x8, &regs->ccfaicfgval);
+
     /* Prepare DMA Registers */
-    int wSize = 32;
-    int wCount = 16;
-    int bTrafficClass = 0;
-    int fEnable64bit = 1;
+    prepare_dma(regs, bufSize, dma_addrA, dma_addrB, swCount);
 
-    u32 wtlps =
-        (wSize & 0x1FFF) | ((bTrafficClass & 0x7) << 16) |
-        ((fEnable64bit & 1) << 19) |
-        ((u32) (dma_addrA >> 32) << 24);
-
-    u32 rtlps =
-        (wSize & 0x1FFF) | ((bTrafficClass & 0x7) << 16) |
-        ((fEnable64bit & 1) << 19) |
-        ((u32) (dma_addrB >> 32) << 24);
-
-    writel(1, &regs->dcsr);
-    writel(0, &regs->dcsr);
-    writel((u32)dma_addrA, &regs->wdmatlpa);
-    writel((u32)dma_addrB, &regs->rdmatlpa);
-    writel(wtlps, &regs->wdmatlps);
-    writel(rtlps, &regs->rdmatlps);
-    writel(wCount, &regs->wdmatlpc);
-
-    writel((dwLen << 16) | (dwSize/2048), &regs->wdmatlpp);
-
+    /* Start FA data acquisition */
     writel(1, &regs->ddmacr);
 
-    /* and now wait for interrupt (release) */
-//    msleep(200);
-
-    for (i=0; i<dwLen; i++) {
+    for (i=0; i<swCount; i++) {
         down(&sem);
 
         if (sw) {
-            if (copy_to_user(buf + (i*dwSize), bufferA, dwSize) != 0)
-            count = -EFAULT;
+            if (copy_to_user(buf + (i*bufSize), bufferA, bufSize) != 0)
+                count = -EFAULT;
         }
         else {
-            if (copy_to_user(buf + (i*dwSize), bufferB, dwSize) != 0)
-            count = -EFAULT;
+            if (copy_to_user(buf + (i*bufSize), bufferB, bufSize) != 0)
+                count = -EFAULT;
         }
     }
 
     printk(KERN_ERR "Buffers are copied.\n");
 
 /*
-    dma_unmap_single(fa_sniffer->device, dma_addrA, dwSize, DMA_FROM_DEVICE);
-    dma_unmap_single(fa_sniffer->device, dma_addrB, dwSize, DMA_FROM_DEVICE);
+    dma_unmap_single(fa_sniffer->device, dma_addrA, bufSize, DMA_FROM_DEVICE);
+    dma_unmap_single(fa_sniffer->device, dma_addrB, bufSize, DMA_FROM_DEVICE);
 */
 
 /*
-    if (copy_to_user(buf, bufferA, dwSize) != 0)
+    if (copy_to_user(buf, bufferA, bufSize) != 0)
         count = -EFAULT;
-    if (copy_to_user(buf+dwSize, bufferB, dwSize) != 0)
+    if (copy_to_user(buf+bufSize, bufferB, bufSize) != 0)
         count = -EFAULT;
 */
 
@@ -243,7 +303,7 @@ static irqreturn_t fa_sniffer_irq(
 {
     struct fa_sniffer_data *fa_sniffer = (struct fa_sniffer_data *) dev_id;
     struct x5pcie_dma_registers *regs = fa_sniffer->bar0;
-    regs->ccfaiirqclr = 0;
+    regs->ccfaiirqclr = 0x100;
     sw = !sw;
     up(&sem);
     printk(KERN_ERR "fa_sniffer interrupt %p\n", dev_id);
