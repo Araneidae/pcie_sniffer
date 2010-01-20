@@ -8,8 +8,8 @@
 
 #include <linux/string.h>   // memset, testing only.
 #include <linux/delay.h>
+#include <linux/completion.h>
 
-#include <asm/semaphore.h>
 
 /* Xilinx vendor id. */
 #define XILINX_VID      0x10EE
@@ -22,6 +22,7 @@ MODULE_LICENSE("GPL");
 MODULE_VERSION("0.0-dev");
 
 
+/* Register map for FA sniffer PCIe interface. */
 struct x5pcie_dma_registers {
     u32 dcsr;         /** 0x00 device control status register*/
     u32 ddmacr;       /** 0x04 device DMA control status register */
@@ -57,9 +58,13 @@ struct fa_sniffer_data {
     struct x5pcie_dma_registers * bar0;
 };
 
-static struct semaphore sem;
+
+
+DECLARE_COMPLETION(irq_done);
 
 bool sw = false;
+
+
 
 #define TEST_(test, rc, err, target, message) \
     do if (test) \
@@ -69,24 +74,6 @@ bool sw = false;
         goto target; \
     } while (0)
 
-
-#if 0
-#define TEST_RC(rc, target, message) \
-    do if (rc < 0) \
-    { \
-        printk(KERN_ERR "fa_sniffer: " message ": %d\n", -rc); \
-        goto target; \
-    } while (0)
-
-#define TEST_PTR(rc, ptr, target, message) \
-    do if (IS_ERR(ptr) < 0) \
-    { \
-        rc = PTR_ERR(ptr); \
-        printk(KERN_ERR "fa_sniffer: " message ": %d\n", -rc); \
-        goto target; \
-    } while (0)
-#endif
-
 #define TEST_RC(rc, target, message) \
     TEST_((rc) < 0, rc, rc, target, message)
 
@@ -94,26 +81,24 @@ bool sw = false;
     TEST_(IS_ERR(ptr) < 0, rc, PTR_ERR(ptr), target, message)
 
 
-static u32 code2size(char bCode)
+static int code2size(int bCode)
 {
+    bCode = bCode & 0x7;
     if (bCode > 0x05)
         return 0;
-    return (u32)(128 << bCode);
+    else
+        return 128 << bCode;
 }
 
 static int DMAGetMaxPacketSize(struct x5pcie_dma_registers *regs)
 {
-    u32 dltrsstat;
-    u32 wMaxCapPayload;
-    u32 wMaxProgPayload;
-
     /* Read encoded max payload sizes */
-    dltrsstat = regs->dltrsstat;
+    int dltrsstat = regs->dltrsstat;
     /* Convert encoded max payload sizes into byte count */
     /* bits [2:0] : Capability maximum payload size for the device */
-    wMaxCapPayload = code2size((char)(dltrsstat & 0x7));
+    int wMaxCapPayload = code2size(dltrsstat);
     /* bits [10:8] : Programmed maximum payload size for the device */
-    wMaxProgPayload = code2size((char)((dltrsstat >> 8) & 0x7));
+    int wMaxProgPayload = code2size(dltrsstat >> 8);
 
     if (wMaxCapPayload < wMaxProgPayload)
         return wMaxCapPayload;
@@ -122,22 +107,22 @@ static int DMAGetMaxPacketSize(struct x5pcie_dma_registers *regs)
 }
 
 /* Prepares FA Sniffer card to perform DMA. */
-static int prepare_dma(struct x5pcie_dma_registers *regs, u32 bufSize, dma_addr_t dma_addrA, dma_addr_t dma_addrB, u32 swCount)
+static void prepare_dma(
+    struct x5pcie_dma_registers *regs,
+    u32 frame_count, dma_addr_t dma_addrA, dma_addr_t dma_addrB, u32 swCount)
 {
     /* Prepare DMA Registers */
 
     /* Get Maximum TLP size and compute how many TLPs are required for one
-     * frame of 2048 bytes
-     */
+     * frame of 2048 bytes */
     int wSize = DMAGetMaxPacketSize(regs)/4; // converted to DWORDs
     int wCount = 2048/wSize;                 // # of TLPs required for a frame
     int bTrafficClass = 0;  // Default Memory Write TLP Traffic Class
     int fEnable64bit = 1;   // Enable 64b Memroy Write TLP Generation
 
-    /*
-     * The register structure below may seem a bit awkward, but it is kept
-     * like this to be register-compatible with Xilinx reference design (xapp1052).
-     */
+    /* The register structure below may seem a bit awkward, but it is kept
+     * like this to be register-compatible with Xilinx reference design
+     * (xapp1052).  */
 
     // Prepare Buffer-A TLP Size & Upper Address
     u32 wtlps =
@@ -163,14 +148,13 @@ static int prepare_dma(struct x5pcie_dma_registers *regs, u32 bufSize, dma_addr_
 
     // Switch count, and
     // Buffer length in terms of number of 2K frames
-    writel((swCount << 16) | (bufSize/2048), &regs->wdmatlpp);
+    writel((swCount << 16) | frame_count, &regs->wdmatlpp);
 
     // Assert Initiator Reset
     writel(1, &regs->dcsr);
     writel(0, &regs->dcsr);
-
-    return 0;
 }
+
 
 
 static int fa_sniffer_open(struct inode *inode, struct file *file)
@@ -182,30 +166,26 @@ static int fa_sniffer_open(struct inode *inode, struct file *file)
 }
 
 
+static int fa_sniffer_release(struct inode *inode, struct file *file)
+{
+    return 0;
+}
+
+
 static ssize_t fa_sniffer_read(
     struct file *file, char *buf, size_t count, loff_t *f_pos)
 {
-    struct fa_sniffer_data *fa_sniffer =
-        (struct fa_sniffer_data *) file->private_data;
+    struct fa_sniffer_data *fa_sniffer = file->private_data;
     struct x5pcie_dma_registers *regs = fa_sniffer->bar0;
 
-    u32 i;
-
-    sema_init(&sem, 0); // init_MUTEX_LOCKED
+    INIT_COMPLETION(irq_done);
 
     /* Buffer size is set to max 128KB. It can hold 64 frames */
-    u32 bufSize = 64*2048;
+    size_t bufSize = 64*2048;
     /* Compute how many times buffers are going to be switched based on 
-     * how many frames user wants to capture
-     */
-    u32 swCount = count / bufSize;
+     * how many frames user wants to capture. */
+    int swCount = count / bufSize;
 
-/*
-    if (count > swCount*bufSize)
-        count = swCount*bufSize;
-    if (count != swCount*bufSize)
-        return -EFBIG;
-*/
 
     /* Buffer-A Allocation */
     void * bufferA = kmalloc(bufSize, GFP_KERNEL | __GFP_COLD);
@@ -234,37 +214,32 @@ static ssize_t fa_sniffer_read(
     writel(0x8, &regs->ccfaicfgval);
 
     /* Prepare DMA Registers */
-    prepare_dma(regs, bufSize, dma_addrA, dma_addrB, swCount);
+    prepare_dma(regs, bufSize/2048, dma_addrA, dma_addrB, swCount);
 
     /* Start FA data acquisition */
     writel(1, &regs->ddmacr);
 
-    for (i=0; i<swCount; i++) {
-        down(&sem);
+    int i;
+    for (i = 0; i <= swCount; i++) {
+        int rc = wait_for_completion_interruptible(&irq_done);
+        if (rc) {
+            count = rc;
+            goto no_dma_addr;
+        }
 
-        if (sw) {
-            if (copy_to_user(buf + (i*bufSize), bufferA, bufSize) != 0)
-                count = -EFAULT;
+        void * buffer = sw ? bufferA : bufferB;
+        size_t copy_count = count > bufSize ? bufSize : count;
+        if (copy_to_user(buf, buffer, copy_count) != 0)
+        {
+            count = -EFAULT;
+            goto no_dma_addr;
         }
-        else {
-            if (copy_to_user(buf + (i*bufSize), bufferB, bufSize) != 0)
-                count = -EFAULT;
-        }
+
+        buf += copy_count;
     }
 
     printk(KERN_ERR "Buffers are copied.\n");
 
-/*
-    dma_unmap_single(fa_sniffer->device, dma_addrA, bufSize, DMA_FROM_DEVICE);
-    dma_unmap_single(fa_sniffer->device, dma_addrB, bufSize, DMA_FROM_DEVICE);
-*/
-
-/*
-    if (copy_to_user(buf, bufferA, bufSize) != 0)
-        count = -EFAULT;
-    if (copy_to_user(buf+bufSize, bufferB, bufSize) != 0)
-        count = -EFAULT;
-*/
 
 no_dma_addr:
     kfree(bufferA);
@@ -272,46 +247,28 @@ no_dma_addr:
 no_buffer:
     return count;
 
-//     if (*f_pos >= BAR0_LEN)
-//         return 0;
-//     else
-//     {
-//         size_t to_copy = BAR0_LEN - *f_pos;
-//         if (to_copy > count)
-//             to_copy = count;
-//         char * from = (char *) fa_sniffer->bar0 + *f_pos;
-//         printk(KERN_ERR "reading from %p\n", from);
-//         if (copy_to_user(buf, from, to_copy))
-//             return -EFAULT;
-//         else
-//         {
-//             *f_pos += to_copy;
-//             return to_copy;
-//         }
-//     }
 }
 
 static struct file_operations fa_sniffer_fops = {
     .owner = THIS_MODULE,
     .open = fa_sniffer_open,
-//    .release = fa_sniffer_release,
+    .release = fa_sniffer_release,
     .read = fa_sniffer_read
 };
 
 static irqreturn_t fa_sniffer_irq(
     int irq, void * dev_id, struct pt_regs *pt_regs)
 {
-    struct fa_sniffer_data *fa_sniffer = (struct fa_sniffer_data *) dev_id;
+    struct fa_sniffer_data *fa_sniffer = dev_id;
     struct x5pcie_dma_registers *regs = fa_sniffer->bar0;
     regs->ccfaiirqclr = 0x100;
     sw = !sw;
-    up(&sem);
-    printk(KERN_ERR "fa_sniffer interrupt %p\n", dev_id);
-//    printk(KERN_ERR "fa_sniffer interrupt %d\n", regs->wdmairqperf);
+    complete(&irq_done);
     return IRQ_HANDLED;
 }
 
 
+/* Returns the requested block of bar registers. */
 static void * get_bar(struct pci_dev *dev, int bar, resource_size_t min_size)
 {
     if (pci_resource_len(dev, bar) < min_size)
@@ -377,8 +334,9 @@ static int __devinit fa_sniffer_probe(
     struct fa_sniffer_data *fa_sniffer =
         kzalloc(sizeof(struct fa_sniffer_data), GFP_KERNEL);
     TEST_PTR(rc, fa_sniffer, no_memory, "Unable to allocate memory");
-    dev->dev.driver_data = fa_sniffer;
+
     fa_sniffer->device = &dev->dev;
+    dev_set_drvdata(&dev->dev, fa_sniffer);
 
     rc = fa_sniffer_enable(dev, fa_sniffer);
     if (rc < 0)
@@ -400,6 +358,7 @@ static int __devinit fa_sniffer_probe(
         fa_sniffer->class, NULL, devt, "fa_sniffer");
     TEST_PTR(rc, fa_sniffer_device, no_device, "Unable to create device");
 
+    printk(KERN_ERR "fa_sniffer loaded\n");
     return 0;
 
 no_device:
@@ -419,8 +378,7 @@ no_memory:
 
 static void __devexit fa_sniffer_remove(struct pci_dev *dev)
 {
-    struct fa_sniffer_data *fa_sniffer =
-        (struct fa_sniffer_data *) dev->dev.driver_data;
+    struct fa_sniffer_data *fa_sniffer = dev_get_drvdata(&dev->dev);
     dev_t devt = fa_sniffer->cdev.dev;
 
     device_destroy(fa_sniffer->class, devt);
@@ -429,6 +387,7 @@ static void __devexit fa_sniffer_remove(struct pci_dev *dev)
     unregister_chrdev_region(devt, 1);
     fa_sniffer_disable(dev, fa_sniffer);
     kfree(fa_sniffer);
+    printk(KERN_ERR "fa_sniffer unloaded\n");
 }
 
 
