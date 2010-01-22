@@ -57,28 +57,28 @@ MODULE_VERSION("0.0-dev");
 
 /* Register map for FA sniffer PCIe interface. */
 struct x5pcie_dma_registers {
-    u32 dcsr;         /** 0x00 device control status register*/
-    u32 ddmacr;       /** 0x04 device DMA control status register */
-    u32 wdmatlpa;     /** 0x08 write DMA TLP address */
-    u32 wdmatlps;     /** 0x0C write DMA TLP Size */
-    u32 wdmatlpc;     /** 0x10 write DMA TLP count */
-    u32 wdmatlpp;     /** 0x14 write DMA pattern */
-    u32 rdmatlpp;     /** 0x18 read DMA expected pattern */
-    u32 rdmatlpa;     /** 0x1C read DMA TLP address*/
-    u32 rdmatlps;     /** 0x20 read DMA TLP size*/
-    u32 rdmatlpc;     /** 0x24 read DMA TLP count*/
-    u32 wdmaperf;     /** 0x28 write DMA performace*/
-    u32 rdmaperf;     /** 0x2C read DMA performace*/
-    u32 rdmastat;     /** 0x30 read DMA status*/
-    u32 nrdcomp;      /** 0x34 Number of Read Completion*/
-    u32 rcompdsizw;   /** 0x38 Read Completion Data Size */
-    u32 dlwstat;      /** 0x3C Device Link Width Status*/
-    u32 dltrsstat;    /** 0x40 Device Link Transaction Size Status */
-    u32 dmisccont;    /** 0x44 Device Miscellaneous Control */
-    u32 ccfaiirqclr;  /** 0x48 CC FAI interrupt clear register */
-    u32 dummy[13];    /** 0x4C-0x80 Reserved Address Space */
-    u32 ccfaicfgval;  /** Ox48 CC FAI configuration register */
-    u32 wdmairqperf;  /** 0x50 WDMA Irq Timer */
+    u32 dcsr;         /* 0x00 device control status register*/
+    u32 ddmacr;       /* 0x04 device DMA control status register */
+    u32 wdmatlpa;     /* 0x08 write DMA TLP address */
+    u32 wdmatlps;     /* 0x0C write DMA TLP Size */
+    u32 wdmatlpc;     /* 0x10 write DMA TLP count */
+    u32 wdmatlpp;     /* 0x14 write DMA pattern */
+    u32 rdmatlpp;     /* 0x18 read DMA expected pattern */
+    u32 rdmatlpa;     /* 0x1C read DMA TLP address*/
+    u32 rdmatlps;     /* 0x20 read DMA TLP size*/
+    u32 rdmatlpc;     /* 0x24 read DMA TLP count*/
+    u32 wdmaperf;     /* 0x28 write DMA performace*/
+    u32 rdmaperf;     /* 0x2C read DMA performace*/
+    u32 rdmastat;     /* 0x30 read DMA status*/
+    u32 nrdcomp;      /* 0x34 Number of Read Completion*/
+    u32 rcompdsizw;   /* 0x38 Read Completion Data Size */
+    u32 dlwstat;      /* 0x3C Device Link Width Status*/
+    u32 dltrsstat;    /* 0x40 Device Link Transaction Size Status */
+    u32 dmisccont;    /* 0x44 Device Miscellaneous Control */
+    u32 ccfaiirqclr;  /* 0x48 CC FAI interrupt clear register */
+    u32 dummy[13];    /* 0x4C-0x80 Reserved Address Space */
+    u32 ccfaicfgval;  /* Ox48 CC FAI configuration register */
+    u32 wdmairqperf;  /* 0x50 WDMA Irq Timer */
 };
 
 struct fa_sniffer_hw {
@@ -193,8 +193,8 @@ static void prepare_dma(
      * frame of 2048 bytes */
     int wCount = FA_FRAME_SIZE / hw->wSize;
     
-    set_dma_buffer(hw, true, dma_addrA);
-    set_dma_buffer(hw, true, dma_addrB);
+    set_dma_buffer(hw, true,  dma_addrA);
+    set_dma_buffer(hw, false, dma_addrB);
 
     // Memory Write TLP Count (for one frame)
     writel(wCount, &hw->regs->wdmatlpc);
@@ -231,9 +231,13 @@ static void start_fa_hw(struct fa_sniffer_hw *hw)
 /*                       Character Device Interface                          */
 /*****************************************************************************/
 
+/* We specify the size of a single FA block as a power of 2 (because we're
+ * going to allocate the block with __get_free_page().  The maximum safe size
+ * to request is 128K, so 2^17 it is. */
+#define FA_BLOCK_SHIFT      17      // 2**17 = 128K
 #define FA_BUFFER_COUNT     5
-#define FA_BLOCK_FRAMES     64
-#define FA_BLOCK_SIZE       (FA_BLOCK_FRAMES * 2048)
+#define FA_BLOCK_SIZE       (1 << FA_BLOCK_SHIFT)
+#define FA_BLOCK_FRAMES     (FA_BLOCK_SIZE / FA_FRAME_SIZE)
 
 
 enum fa_block_state {
@@ -308,21 +312,15 @@ static irqreturn_t fa_sniffer_irq(
     int filled_ix = open->isr_block_index;
     int fresh_ix = step_index(filled_ix, 2);
 
-    printk(KERN_ERR "ix: %d, %d\n", filled_ix, fresh_ix);
-    printk(KERN_ERR "about to pci_dma_sync_single_for_cpu(%p, %llx,...)\n",
-        pdev, open->buffers[filled_ix].dma);
     pci_dma_sync_single_for_cpu(pdev, 
         open->buffers[filled_ix].dma, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
     open->buffers[filled_ix].state = fa_block_data;
 
     TEST_(open->buffers[fresh_ix].state != fa_block_free, ,
         data_overrun, "Data buffer overrun in IRQ\n");
-    printk(KERN_ERR "about to pci_dma_sync_single_for_device(%p, %llx,...)\n",
-        pdev, open->buffers[fresh_ix].dma);
     pci_dma_sync_single_for_device(pdev, 
         open->buffers[fresh_ix].dma, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
-    set_dma_buffer(hw,
-        open->a_or_b, open->buffers[fresh_ix].dma);
+    set_dma_buffer(hw, open->a_or_b, open->buffers[fresh_ix].dma);
     open->buffers[fresh_ix].state = fa_block_dma;
 
     /* Move through the circular buffer. */
@@ -337,6 +335,7 @@ data_overrun:
     /* Whoops.  Better stop the hardware right away! */
     stop_fa_hw(hw);
     open->overrun_detected = true;
+    
 
     /* Wake up the user. */
     wake_up_interruptible(&open->wait_queue);
@@ -373,8 +372,8 @@ static int fa_sniffer_open(struct inode *inode, struct file *file)
         struct fa_block *block = &open->buffers[blk];
         /* We ask for "cache cold" pages just to optimise things, as these
          * pages won't be read without DMA first. */
-        block->block = kmalloc(FA_BLOCK_SIZE, GFP_KERNEL | __GFP_COLD);
-// Should we use __get_free_pages() instead here?
+        block->block = (void *) __get_free_pages(
+            GFP_KERNEL | __GFP_COLD, FA_BLOCK_SHIFT - PAGE_SHIFT);
         TEST_PTR(rc, block->block, no_block, "Unable to allocate buffer");
 
         /* Map each block for DMA. */
@@ -388,7 +387,7 @@ static int fa_sniffer_open(struct inode *inode, struct file *file)
     /* Prepare the initial hardware DMA buffers. */
     open->buffers[0].state = fa_block_dma;
     open->buffers[1].state = fa_block_dma;
-    prepare_dma(fa_sniffer->hw, FA_BLOCK_FRAMES, 2, // -1,
+    prepare_dma(fa_sniffer->hw, FA_BLOCK_FRAMES, 0,
         open->buffers[0].dma, open->buffers[1].dma);
 
     /* Set up the interrupt routine.  This should not trigger until we call
@@ -411,7 +410,8 @@ no_irq:
         pci_unmap_single(pdev, open->buffers[blk].dma,
             FA_BLOCK_SIZE, DMA_FROM_DEVICE);
 no_dma_map:
-        kfree(open->buffers[blk].block);
+        free_pages((unsigned long) open->buffers[blk].block,
+            FA_BLOCK_SHIFT - PAGE_SHIFT);
 no_block:
         ;
     } while (blk > 0);
@@ -435,7 +435,8 @@ static int fa_sniffer_release(struct inode *inode, struct file *file)
     for (blk = 0; blk < FA_BUFFER_COUNT; blk++) {
         pci_unmap_single(pdev, open->buffers[blk].dma,
             FA_BLOCK_SIZE, DMA_FROM_DEVICE);
-        kfree(open->buffers[blk].block);
+        free_pages((unsigned long) open->buffers[blk].block,
+            FA_BLOCK_SHIFT - PAGE_SHIFT);
     }
     kfree(open);
 
@@ -568,9 +569,9 @@ static int __devinit fa_sniffer_probe(
     fa_sniffer->class = class_create(THIS_MODULE, "fa_sniffer");
     TEST_PTR(rc, fa_sniffer->class, no_class, "Unable to create class");
 
-    struct device * fa_sniffer_device = device_create(
-        fa_sniffer->class, NULL, devt, "fa_sniffer");
-    TEST_PTR(rc, fa_sniffer_device, no_device, "Unable to create device");
+    struct device * dev = device_create(
+        fa_sniffer->class, &pdev->dev, devt, "fa_sniffer");
+    TEST_PTR(rc, dev, no_device, "Unable to create device");
 
     printk(KERN_ERR "fa_sniffer loaded\n");
     return 0;
