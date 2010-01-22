@@ -1,5 +1,6 @@
 SIZE=4096
 COUNT=1
+FILE=myfile.bin
 
 # obj-m += hello-1.o
 obj-m += fa_sniffer.o
@@ -23,5 +24,5 @@ clean:
 
 test: # all
 	sudo /sbin/insmod ./fa_sniffer.ko
-	sudo dd if=/dev/fa_sniffer bs=$(SIZE) count=$(COUNT) > myfile.bin
+	sudo dd if=/dev/fa_sniffer bs=$(SIZE) count=$(COUNT) >$(FILE)
 	sudo /sbin/rmmod ./fa_sniffer.ko
