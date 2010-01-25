@@ -6,14 +6,13 @@
 #include <linux/uaccess.h>
 #include <linux/interrupt.h>
 
-#include <linux/string.h>   // memset, testing only.
-#include <linux/delay.h>
-#include <linux/completion.h>
+
 
 MODULE_AUTHOR("Michael Abbott, Diamond Light Source Ltd.");
 MODULE_DESCRIPTION("Driver for PCIe Fast Acquisition Sniffer");
 MODULE_LICENSE("GPL");
-MODULE_VERSION("0.0-dev");
+MODULE_VERSION("0.1-dev");
+
 
 
 /* If test is true then do on_error, print message and goto target. */
@@ -45,12 +44,19 @@ MODULE_VERSION("0.0-dev");
 /*                      FA Sniffer Hardware Definitions                      */
 /*****************************************************************************/
 
-/* A single FA frame is 256 X positions followed by 256 Y positions, each
- * position being a 4 byte integer. */
-#define FA_FRAME_SIZE   2048
+/* The FA sniffer card captures a stream of Fast Acquisition frames from the
+ * FA network and writes them to memory using PCIe DMA transfer.  Each frame
+ * consists of 256 (X,Y) position pairs stored as a sequence of 256 X
+ * positions followed by 256 Y positions, each position being a 4 byte integer.
+ * A new frame arrives every 100 microseconds.
+ *
+ * The driver here endeavours to capture every frame arriving after a file
+ * open call on the FA sniffer device. */
+
+#define FA_FRAME_SIZE   2048    // 256 * (X,Y), 4 bytes each
 
 
-/* Xilinx vendor id. */
+/* Xilinx vendor id: currently just a Xilinx development card. */
 #define XILINX_VID      0x10EE
 #define XILINX_DID      0x0007
 
@@ -117,7 +123,8 @@ static void * get_bar(struct pci_dev *dev, int bar, resource_size_t min_size)
 {
     if (pci_resource_len(dev, bar) < min_size)
         return ERR_PTR(-EINVAL);
-    return pci_iomap(dev, bar, min_size);
+    else
+        return pci_iomap(dev, bar, min_size);
 }
 
 
@@ -138,6 +145,7 @@ static int initialise_fa_hw(struct pci_dev *pdev, struct fa_sniffer_hw **hw)
     /* Now restart the communication controller: needed at present to work
      * around a controller defect. */
     writel(0, &regs->ccfaicfgval);
+    readl(&regs->dcsr);             // Force sequencing of writes!
     writel(8, &regs->ccfaicfgval);
     
     return rc;
@@ -154,7 +162,6 @@ static void release_fa_hw(struct pci_dev *pdev, struct fa_sniffer_hw *hw)
     pci_iounmap(pdev, hw->regs);
     kfree(hw);
 }
-
 
 
 static void set_dma_buffer(
@@ -184,18 +191,12 @@ static void set_dma_buffer(
 
 
 /* Prepares FA Sniffer card to perform DMA. */
-static void prepare_dma(
-    struct fa_sniffer_hw *hw,
-    u32 frame_count, u32 swCount,
-    dma_addr_t dma_addrA, dma_addr_t dma_addrB)
+static void prepare_dma(struct fa_sniffer_hw *hw, int frame_count, int swCount)
 {
     /* Get Maximum TLP size and compute how many TLPs are required for one
      * frame of 2048 bytes */
     int wCount = FA_FRAME_SIZE / hw->wSize;
     
-    set_dma_buffer(hw, true,  dma_addrA);
-    set_dma_buffer(hw, false, dma_addrB);
-
     // Memory Write TLP Count (for one frame)
     writel(wCount, &hw->regs->wdmatlpc);
 
@@ -205,6 +206,7 @@ static void prepare_dma(
 
     // Assert Initiator Reset
     writel(1, &hw->regs->dcsr);
+    readl(&hw->regs->dcsr);
     writel(0, &hw->regs->dcsr);
 }
 
@@ -214,17 +216,27 @@ static void fa_int_ack(struct fa_sniffer_hw *hw)
     hw->regs->ccfaiirqclr = 0x100;
 }
 
+
+/* Enable FA acquisition DMA. */
+
+static void start_fa_hw(struct fa_sniffer_hw *hw)
+{
+    /* Before starting perform a register readback to ensure that all
+     * preceding PCI writes to this device have completed: rather important,
+     * actually! */
+    readl(&hw->regs->ddmacr);       // What's the appropriate register here?
+    writel(1, &hw->regs->ddmacr);
+}
+
+/* Stop DMA transfers as soon as possible, at the very least after the
+ * current frame.  There will be one further interrupt. */
+
 static void stop_fa_hw(struct fa_sniffer_hw *hw)
 {
     writel(0, &hw->regs->ddmacr);
 }
 
-static void start_fa_hw(struct fa_sniffer_hw *hw)
-{
-    writel(1, &hw->regs->ddmacr);
-}
-
-/* Returns 1 if the hardware is active, 0 if the current interrupt is the
+/* Returns 0 if the hardware is active, 1 if the current interrupt is the
  * last interrupt. */
 static int fa_hw_stopped(struct fa_sniffer_hw *hw)
 {
@@ -237,12 +249,43 @@ static int fa_hw_stopped(struct fa_sniffer_hw *hw)
 /*                       Character Device Interface                          */
 /*****************************************************************************/
 
+/* The character device interface provides a very simple streaming API: open
+ * /dev/fa_sniffer and read blocks continuously to access the data stream.
+ * If reads are not fast enough then overrun is detected and read() will
+ * eventually fail (with EIO).
+ *
+ * A circular buffer of DMA buffers is managed by the driver.  At any instant
+ * two of the buffers are assigned to the hardware (one actively being
+ * transferred into, one configured for the next DMA transfer).  Each
+ * transfer generates an interrupt: the first buffer is then handed over to
+ * the reader, and a fresh DMA buffer is configured for transfer.
+ *
+ * Buffers transition through the following sequence of states:
+ *
+ *  +-> fa_block_free       Block is currently unassigned
+ *  |       |
+ *  |       | ISR assigns block to hardware
+ *  |       v
+ *  |   fa_block_dma        Block is assigned to hardware for DMA
+ *  |       |
+ *  |       | ISR marks block as complete
+ *  |       v
+ *  |   fa_block_data       Block contains valid data to be read
+ *  |       |
+ *  |       | read() completes, marks block as free
+ *  +-------+
+ *
+ * The transition dma -> data is observed by wait_event_interruptible(), so
+ * hopefully the necessary memory barriers should be in place; the transition
+ * data -> free is observed by the ISR and probably needs guarding.
+ */
+
 /* We specify the size of a single FA block as a power of 2 (because we're
  * going to allocate the block with __get_free_page().  The maximum safe size
  * to request is 128K, so 2^17 it is. */
 #define FA_BLOCK_SHIFT      17      // 2**17 = 128K
 #define FA_BLOCK_SIZE       (1 << FA_BLOCK_SHIFT)
-#define FA_BUFFER_COUNT     5
+#define FA_BUFFER_COUNT     4
 #define FA_BLOCK_FRAMES     (FA_BLOCK_SIZE / FA_FRAME_SIZE)
 
 
@@ -301,51 +344,63 @@ static irqreturn_t fa_sniffer_isr(
     int irq, void * dev_id, struct pt_regs *pt_regs)
 {
     struct fa_sniffer_open *open = dev_id;
-    struct pci_dev *pdev = open->fa_sniffer->pdev;
     struct fa_sniffer_hw *hw = open->fa_sniffer->hw;
 
-    
-    printk(KERN_ERR "Got FA interrupt: %08x, %d, %d\n",
+    PRINTK(KERN_ERR "Got FA interrupt: %08x, %d, %d\n",
         readl(&hw->regs->wdmairqperf), open->a_or_b,
         open->isr_block_index);
 
-    /* Handshake with the hardware.  If this is the last interrupt then we can
-     * signal our completion.  In truth, if this happens then all the user
-     * signalling stuff is probably a waste of time -- however, it does let
-     * the user read that one last block! */
     if (fa_hw_stopped(hw))
     {
+        /* This is the last interrupt.  All we need to do is let
+         * fa_sniffer_release() know that DMA is over and clean up can
+         * complete.
+         *    We only come here if stop_fa_hw() has been called, which means
+         * that either the file handle has been closed or we detected an
+         * overrun.  Either way, the open() call needs no further
+         * notification. */
         printk(KERN_ERR "fa_sniffer: signalling ISR done\n");
         complete(&open->isr_done);
     }
-    
-    int filled_ix = open->isr_block_index;
-    int fresh_ix = step_index(filled_ix, 2);
-
-    pci_dma_sync_single_for_cpu(pdev, 
-        open->buffers[filled_ix].dma, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
-    open->buffers[filled_ix].state = fa_block_data;
-
-    if (open->buffers[fresh_ix].state == fa_block_free)
-    {
-        pci_dma_sync_single_for_device(pdev, 
-            open->buffers[fresh_ix].dma, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
-        set_dma_buffer(hw, open->a_or_b, open->buffers[fresh_ix].dma);
-        open->buffers[fresh_ix].state = fa_block_dma;
-
-        /* Move through the circular buffer. */
-        open->isr_block_index = step_index(filled_ix, 1);
-        open->a_or_b = ! open->a_or_b;
-    }
     else
     {
-        printk(KERN_ERR "fa_sniffer: Data buffer overrun in IRQ\n");
-        /* Whoops.  Better stop the hardware right away! */
-        stop_fa_hw(hw);
-        open->overrun_detected = true;
+        /* Normal DMA complete interrupt, data in hand is ready: set up the
+         * next transfer and let the read know that there's data to read. */
+        struct pci_dev *pdev = open->fa_sniffer->pdev;
+    
+        int filled_ix = open->isr_block_index;
+        int fresh_ix = step_index(filled_ix, 2);
+
+        pci_dma_sync_single_for_cpu(pdev, 
+            open->buffers[filled_ix].dma, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
+        smp_wmb();
+        open->buffers[filled_ix].state = fa_block_data;
+
+        smp_rmb();
+        if (open->buffers[fresh_ix].state == fa_block_free)
+        {
+            pci_dma_sync_single_for_device(pdev, 
+                open->buffers[fresh_ix].dma, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
+            set_dma_buffer(hw, open->a_or_b, open->buffers[fresh_ix].dma);
+            open->buffers[fresh_ix].state = fa_block_dma;
+
+            /* Move through the circular buffer. */
+            open->isr_block_index = step_index(filled_ix, 1);
+            open->a_or_b = ! open->a_or_b;
+        }
+        else
+        {
+            /* Whoops: the next buffer isn't free, better stop the hardware
+             * right away! */
+            printk(KERN_ERR "fa_sniffer: Data buffer overrun in IRQ\n");
+            stop_fa_hw(hw);
+            open->overrun_detected = true;
+        }
+
+        /* There should be a read() waiting to hear from us. */
+        wake_up_interruptible(&open->wait_queue);
     }
 
-    wake_up_interruptible(&open->wait_queue);
     fa_int_ack(hw);
     open->isr_count += 1;
     return IRQ_HANDLED;
@@ -396,15 +451,16 @@ static int fa_sniffer_open(struct inode *inode, struct file *file)
             rc = -EIO, no_dma_map, "Unable to map DMA block");
         block->state = fa_block_free;
     }
-
-    /* Prepare the initial hardware DMA buffers. */
+    /* The first two buffers will be handed straight to the hardware. */
     open->buffers[0].state = fa_block_dma;
     open->buffers[1].state = fa_block_dma;
-    prepare_dma(fa_sniffer->hw, FA_BLOCK_FRAMES, 0,
-        open->buffers[0].dma, open->buffers[1].dma);
 
-    /* Set up the interrupt routine.  This should not trigger until we call
-     * start_fa_hw(). */
+    prepare_dma(fa_sniffer->hw, FA_BLOCK_FRAMES, 0);
+    /* Prepare the initial hardware DMA buffers. */
+    set_dma_buffer(fa_sniffer->hw, true,  open->buffers[0].dma);
+    set_dma_buffer(fa_sniffer->hw, false, open->buffers[1].dma);
+
+    /* Set up the interrupt routine and start things off. */
     rc = request_irq(
         pdev->irq, fa_sniffer_isr,
         IRQF_SHARED, "fa_sniffer", open);
@@ -415,7 +471,7 @@ static int fa_sniffer_open(struct inode *inode, struct file *file)
 
 no_irq:
    
-    /* Release circular buffer resources.  Rather tricky interlocking with
+    /* Release circular buffer resources.  Rather tricky interaction with
      * allocation loop above so that we release precisely those resources we
      * allocated, in reverse order. */
     do {
@@ -450,7 +506,7 @@ static int fa_sniffer_release(struct inode *inode, struct file *file)
 
     printk(KERN_ERR "freeing irq, count = %d\n", open->isr_count);
     free_irq(pdev->irq, open);
-    msleep(500);
+
     int blk;
     for (blk = 0; blk < FA_BUFFER_COUNT; blk++) {
         pci_unmap_single(pdev, open->buffers[blk].dma,
@@ -476,6 +532,7 @@ static ssize_t fa_sniffer_read(
         /* Wait for data to arrive in the current block. */
         struct fa_block * block =
             & open->buffers[open->read_block_index];
+        smp_rmb();
         rc = wait_event_interruptible(open->wait_queue,
             block->state == fa_block_data  ||  open->overrun_detected);
         TEST_RC(rc, failed, "read interrupted");
@@ -500,10 +557,11 @@ static ssize_t fa_sniffer_read(
         /* If the current block has been consumed then move on to the next
          * block. */
         if (open->read_offset >= FA_BLOCK_SIZE) {
-            block->state = fa_block_free;
             open->read_offset = 0;
             open->read_block_index =
                 step_index(open->read_block_index, 1);
+            smp_wmb();
+            block->state = fa_block_free;
         }
     }
 
@@ -549,6 +607,7 @@ static int fa_sniffer_enable(struct pci_dev *pdev)
     return 0;
 
 no_msi:
+//    pci_clear_master(pdev);
     pci_release_regions(pdev);
 no_regions:
     pci_disable_device(pdev);
@@ -559,6 +618,7 @@ no_device:
 static void fa_sniffer_disable(struct pci_dev *pdev)
 {
     pci_disable_msi(pdev);
+//    pci_clear_master(pdev);       // On more recent kernels
     pci_release_regions(pdev);
     pci_disable_device(pdev);
 }
@@ -567,7 +627,9 @@ static void fa_sniffer_disable(struct pci_dev *pdev)
 static int __devinit fa_sniffer_probe(
     struct pci_dev *pdev, const struct pci_device_id *id)
 {
-    int rc = 0;
+    int rc = fa_sniffer_enable(pdev);
+    if (rc < 0)     goto no_sniffer;
+
     struct fa_sniffer *fa_sniffer = kmalloc(sizeof(*fa_sniffer), GFP_KERNEL);
     TEST_PTR(rc, fa_sniffer, no_memory, "Unable to allocate memory");
 
@@ -575,8 +637,6 @@ static int __devinit fa_sniffer_probe(
     fa_sniffer->pdev = pdev;
     pci_set_drvdata(pdev, fa_sniffer);
 
-    rc = fa_sniffer_enable(pdev);
-    if (rc < 0)     goto no_sniffer;
     rc = initialise_fa_hw(pdev, &fa_sniffer->hw);
     if (rc < 0)     goto no_hw;
 
@@ -597,10 +657,10 @@ no_cdev:
 no_device:
     release_fa_hw(pdev, fa_sniffer->hw);
 no_hw:
-    fa_sniffer_disable(pdev);
-no_sniffer:
     kfree(fa_sniffer);
 no_memory:
+    fa_sniffer_disable(pdev);
+no_sniffer:
     return rc;
 }
 
@@ -612,13 +672,13 @@ static void __devexit fa_sniffer_remove(struct pci_dev *pdev)
     cdev_del(&fa_sniffer->cdev);
     device_destroy(fa_sniffer_class, fa_sniffer->cdev.dev);
     release_fa_hw(pdev, fa_sniffer->hw);
-    fa_sniffer_disable(pdev);
     kfree(fa_sniffer);
+    fa_sniffer_disable(pdev);
     printk(KERN_ERR "fa_sniffer unloaded\n");
 }
 
 
-static struct pci_device_id fa_sniffer_ids[] = {
+static const struct pci_device_id fa_sniffer_ids[] = {
     { PCI_DEVICE(XILINX_VID, XILINX_DID) },
     { 0 }
 };
