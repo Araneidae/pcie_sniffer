@@ -640,6 +640,19 @@ static void fa_sniffer_disable(struct pci_dev *pdev)
 }
 
 
+static ssize_t show_firmware_version(
+    struct device *dev, struct device_attribute *attr, char *buf)
+{
+    struct pci_dev *pdev = container_of(dev, struct pci_dev, dev);
+    struct fa_sniffer *fa_sniffer = pci_get_drvdata(pdev);
+    int ver = readl(&fa_sniffer->hw->regs->dcsr);
+    return sprintf(buf, "v%d.%02x.%d\n",
+        (ver >> 12) & 0xf, (ver >> 4) & 0xff, ver & 0xf);
+}
+
+static DEVICE_ATTR(firmware, 0444, show_firmware_version, NULL);
+
+
 static int __devinit fa_sniffer_probe(
     struct pci_dev *pdev, const struct pci_device_id *id)
 {
@@ -660,22 +673,29 @@ static int __devinit fa_sniffer_probe(
     rc = initialise_fa_hw(pdev, &fa_sniffer->hw);
     if (rc < 0)     goto no_hw;
 
-    struct device * dev = device_create(
-        fa_sniffer_class, &pdev->dev,
-        MKDEV(fa_sniffer_major, minor), "fa_sniffer%d", minor);
-    TEST_PTR(rc, dev, no_device, "Unable to create device");
-
     cdev_init(&fa_sniffer->cdev, &fa_sniffer_fops);
     fa_sniffer->cdev.owner = THIS_MODULE;
     rc = cdev_add(&fa_sniffer->cdev, MKDEV(fa_sniffer_major, minor), 1);
     TEST_RC(rc, no_cdev, "Unable to register device");
 
-    printk(KERN_INFO "fa_sniffer loaded\n");
+    struct device * dev = device_create(
+        fa_sniffer_class, &pdev->dev,
+        MKDEV(fa_sniffer_major, minor), "fa_sniffer%d", minor);
+    TEST_PTR(rc, dev, no_device, "Unable to create device");
+
+    printk(KERN_ERR "device_create: %p %p %p\n", pdev, dev, &pdev->dev);
+    rc = device_create_file(&pdev->dev, &dev_attr_firmware);
+    TEST_RC(rc, no_attr, "Unable to create attr");
+
+    printk(KERN_INFO "fa_sniffer%d installed\n", minor);
     return 0;
 
-no_cdev:
+    device_remove_file(&pdev->dev, &dev_attr_firmware);
+no_attr:
     device_destroy(fa_sniffer_class, MKDEV(fa_sniffer_major, minor));
 no_device:
+    cdev_del(&fa_sniffer->cdev);
+no_cdev:
     release_fa_hw(pdev, fa_sniffer->hw);
 no_hw:
     kfree(fa_sniffer);
@@ -693,14 +713,15 @@ static void __devexit fa_sniffer_remove(struct pci_dev *pdev)
     struct fa_sniffer *fa_sniffer = pci_get_drvdata(pdev);
     unsigned int minor = MINOR(fa_sniffer->cdev.dev);
 
-    cdev_del(&fa_sniffer->cdev);
+    device_remove_file(&pdev->dev, &dev_attr_firmware);
     device_destroy(fa_sniffer_class, fa_sniffer->cdev.dev);
+    cdev_del(&fa_sniffer->cdev);
     release_fa_hw(pdev, fa_sniffer->hw);
     kfree(fa_sniffer);
     fa_sniffer_disable(pdev);
     release_minor(minor);
     
-    printk(KERN_INFO "fa_sniffer unloaded\n");
+    printk(KERN_INFO "fa_sniffer%d removed\n", minor);
 }
 
 
@@ -733,7 +754,7 @@ static int __init fa_sniffer_init(void)
     
     rc = pci_register_driver(&fa_sniffer_driver);
     TEST_RC(rc, no_driver, "Unable to register driver");
-    printk(KERN_INFO "Installed FA module\n");
+    printk(KERN_INFO "Installed FA sniffer module\n");
     return rc;
 
 no_driver:
@@ -749,7 +770,7 @@ static void __exit fa_sniffer_exit(void)
     pci_unregister_driver(&fa_sniffer_driver);
     unregister_chrdev_region(fa_sniffer_major, FA_SNIFFER_MAX_MINORS);
     class_destroy(fa_sniffer_class);
-    printk(KERN_INFO "Removed FA module\n");
+    printk(KERN_INFO "Removed FA sniffer module\n");
 }
 
 

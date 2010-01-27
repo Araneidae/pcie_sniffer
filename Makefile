@@ -2,7 +2,7 @@ SIZE=4096
 COUNT=1
 FILE=myfile.bin
 
-# obj-m += hello-1.o
+
 obj-m += fa_sniffer.o
 
 ifneq ($(shell hostname -s),pc0046)
@@ -15,12 +15,14 @@ EXTRA_CFLAGS += -Wno-declaration-after-statement -Wno-unused-parameter
 EXTRA_CFLAGS += -Wno-missing-field-initializers
 export EXTRA_CFLAGS
 
-all:
+all: fa_sniffer.ko
+
+fa_sniffer.ko: fa_sniffer.c
 	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules
 
 clean:
 	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) clean
 	rm -f Module.markers Module.symvers
 
-test: # all
+test: fa_sniffer.ko
 	sudo ./runtest bs=$(SIZE) count=$(COUNT) >$(FILE)
