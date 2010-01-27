@@ -1,3 +1,5 @@
+/* Kernel driver for Communication Controller FA sniffer. */
+
 #include <linux/module.h>
 #include <linux/device.h>
 #include <linux/fs.h>
@@ -32,9 +34,6 @@ MODULE_VERSION("0.1-dev");
  * and goto target. */
 #define TEST_PTR(rc, ptr, target, message) \
     TEST_(IS_ERR(ptr), rc = PTR_ERR(ptr), target, message)
-
-
-#define PRINTK(args...) // printk(args)
 
 
 
@@ -84,12 +83,12 @@ struct x5pcie_dma_registers {
     u32 ccfaiirqclr;  /* 0x48 CC FAI interrupt clear register */
     u32 dummy[13];    /* 0x4C-0x7F Reserved Address Space */
     u32 ccfaicfgval;  /* Ox80 CC FAI configuration register */
-    u32 wdmairqperf;  /* 0x84 WDMA Irq Timer */
+    u32 wdmastatus;   /* 0x84 WDMA status register */
 };
 
 struct fa_sniffer_hw {
     struct x5pcie_dma_registers * regs;
-    int wSize;              
+    int tlp_size;   // Max length of single PCI DMA transfer (in bytes)
 };
 
 #define BAR0_LEN    8192
@@ -138,9 +137,9 @@ static int initialise_fa_hw(struct pci_dev *pdev, struct fa_sniffer_hw **hw)
     struct x5pcie_dma_registers *regs = get_bar(pdev, 0, BAR0_LEN);
     TEST_PTR(rc, regs, no_bar, "Cannot find registers");
     (*hw)->regs = regs;
-    (*hw)->wSize = DMAGetMaxPacketSize(regs) / 4;
+    (*hw)->tlp_size = DMAGetMaxPacketSize(regs);
 
-    printk(KERN_ERR "FA version %08x\n", regs->dcsr);
+    printk(KERN_INFO "FA version %08x\n", regs->dcsr);
 
     /* Now restart the communication controller: needed at present to work
      * around a controller defect. */
@@ -164,56 +163,45 @@ static void release_fa_hw(struct pci_dev *pdev, struct fa_sniffer_hw *hw)
 }
 
 
-static void set_dma_buffer(
-    struct fa_sniffer_hw *hw, bool a_or_b, dma_addr_t buffer)
+static void set_dma_buffer(struct fa_sniffer_hw *hw, dma_addr_t buffer)
 {
     /* Get Maximum TLP size and compute how many TLPs are required for one
      * frame of 2048 bytes */
     int bTrafficClass = 0;  // Default Memory Write TLP Traffic Class
-    int fEnable64bit = 1;   // Enable 64b Memroy Write TLP Generation
+    int fEnable64bit = 1;   // Enable 64b Memory Write TLP Generation
 
+    /* Format of wdmatlps (in bits):
+     *  31:24   Bits 39:32 of the DMA address
+     *  23:20   (unused)
+     *  19      Emable 64 bit addresses
+     *  18:16   (unused)
+     *  15:13   Traffic class (0 => default memory write)
+     *  12:0    Number of 32 bit transfers in one TLP. */
     u32 top_word =
-        (hw->wSize & 0x1FFF) | ((bTrafficClass & 0x7) << 16) |
+        ((u32) (buffer >> 32) << 24) |
         ((fEnable64bit & 1) << 19) |
-        ((u32) (buffer >> 32) << 24);
+        ((bTrafficClass & 0x7) << 16) |
+        ((hw->tlp_size / 4) & 0x1FFF);
     u32 bottom_word = (u32) buffer;
 
-    PRINTK(KERN_ERR "set_dma_buffer %p, %d, %llx\n", hw, a_or_b, buffer);
-    
-    if (a_or_b) {
-        writel(bottom_word, &hw->regs->wdmatlpa);
-        writel(top_word,    &hw->regs->wdmatlps);
-    } else {
-        writel(bottom_word, &hw->regs->rdmatlpa);
-        writel(top_word,    &hw->regs->rdmatlps);
-    }
+    writel(bottom_word, &hw->regs->wdmatlpa);
+    writel(top_word,    &hw->regs->wdmatlps);
 }
 
 
-/* Prepares FA Sniffer card to perform DMA. */
-static void prepare_dma(struct fa_sniffer_hw *hw, int frame_count, int swCount)
+/* Prepares FA Sniffer card to perform DMA.  frame_count is the number of CC
+ * frames that will be captured into each DMA buffer. */
+static void prepare_dma(struct fa_sniffer_hw *hw, int frame_count)
 {
-    /* Get Maximum TLP size and compute how many TLPs are required for one
-     * frame of 2048 bytes */
-    int wCount = FA_FRAME_SIZE / hw->wSize;
-    
-    // Memory Write TLP Count (for one frame)
-    writel(wCount, &hw->regs->wdmatlpc);
-
-    // Switch count, and
+    // Memory Write TLP Count (for one frame), in bytes
+    writel(FA_FRAME_SIZE / hw->tlp_size, &hw->regs->wdmatlpc);
     // Buffer length in terms of number of 2K frames
-    writel((swCount << 16) | frame_count, &hw->regs->wdmatlpp);
+    writel(frame_count, &hw->regs->wdmatlpp);
 
     // Assert Initiator Reset
     writel(1, &hw->regs->dcsr);
     readl(&hw->regs->dcsr);
     writel(0, &hw->regs->dcsr);
-}
-
-
-static void fa_int_ack(struct fa_sniffer_hw *hw)
-{
-    hw->regs->ccfaiirqclr = 0x100;
 }
 
 
@@ -224,23 +212,39 @@ static void start_fa_hw(struct fa_sniffer_hw *hw)
     /* Before starting perform a register readback to ensure that all
      * preceding PCI writes to this device have completed: rather important,
      * actually! */
-    readl(&hw->regs->ddmacr);       // What's the appropriate register here?
-    writel(1, &hw->regs->ddmacr);
+    readl(&hw->regs->dcsr);
+
+    /* Format of ddmacr (in bits):
+     *  6       Don't snoop caches during DMA
+     *  5       Relaxed ordering on DMA write
+     *  1       Stop DMA
+     *  0       Write DMA start. */
+//    u32 control = (1 << 6) | (1 << 5) | (1 << 0);
+//    u32 control = (1 << 6) | (1 << 0);
+    u32 control = 1;
+    writel(control, &hw->regs->ddmacr);
 }
 
 /* Stop DMA transfers as soon as possible, at the very least after the
  * current frame.  There will be one further interrupt. */
-
 static void stop_fa_hw(struct fa_sniffer_hw *hw)
 {
-    writel(0, &hw->regs->ddmacr);
+    writel(2, &hw->regs->ddmacr);
 }
 
-/* Returns 0 if the hardware is active, 1 if the current interrupt is the
- * last interrupt. */
-static int fa_hw_stopped(struct fa_sniffer_hw *hw)
+/* Read status associated with latest interrupt.  Returns current frame count
+ * in bottom byte, returns DMA transfer status in bits 11:8 thus:
+ *  ...1    Buffer finished, new DMA in progress (normal condition)
+ *  000.    DMA still in progress
+ *  xxx.    DMA halted, reason code one of:
+ *      1    No valid DMA address (stopped)
+ *      2    Explicit user stop (stopped)
+ *      4    Communication controller timed out (stopped). */
+#define FA_STATUS_DATA_OK       0x100   // DMA still in progress
+#define FA_STATUS_STOPPED       0xE00   // If non zero, DMA halted
+static int fa_hw_status(struct fa_sniffer_hw *hw)
 {
-    return readl(&hw->regs->ddmacr) & 1;
+    return readl(&hw->regs->wdmastatus);
 }
 
 
@@ -281,11 +285,10 @@ static int fa_hw_stopped(struct fa_sniffer_hw *hw)
  */
 
 /* We specify the size of a single FA block as a power of 2 (because we're
- * going to allocate the block with __get_free_page().  The maximum safe size
- * to request is 128K, so 2^17 it is. */
-#define FA_BLOCK_SHIFT      17      // 2**17 = 128K
+ * going to allocate the block with __get_free_page(). */
+#define FA_BLOCK_SHIFT      20      // 2**20 = 1M
 #define FA_BLOCK_SIZE       (1 << FA_BLOCK_SHIFT)
-#define FA_BUFFER_COUNT     4
+#define FA_BUFFER_COUNT     5
 #define FA_BLOCK_FRAMES     (FA_BLOCK_SIZE / FA_FRAME_SIZE)
 
 
@@ -317,17 +320,14 @@ struct fa_sniffer_open {
     /* Device status.  There are two DMA buffers allocated to the device, one
      * currently being read, the next queued to be read.  We will be
      * interrupted when the current buffer is switched. */
-    bool a_or_b;                // Used to track the current buffer
     int isr_block_index;        // Block currently being read into by DMA
     struct completion isr_done; // Completion of all interrupts
-    int isr_count;
     
     /* Reader status. */
-    bool overrun_detected;      // Set by ISR, read by reader
+    bool stopped;               // Set by ISR, read by reader
     int read_block_index;       // Index of next block in buffers[] to read
     int read_offset;            // Offset into current block to read.
 };
-
 
 
 
@@ -345,64 +345,62 @@ static irqreturn_t fa_sniffer_isr(
 {
     struct fa_sniffer_open *open = dev_id;
     struct fa_sniffer_hw *hw = open->fa_sniffer->hw;
+    struct pci_dev *pdev = open->fa_sniffer->pdev;
+    int filled_ix = open->isr_block_index;
 
-    PRINTK(KERN_ERR "Got FA interrupt: %08x, %d, %d\n",
-        readl(&hw->regs->wdmairqperf), open->a_or_b,
-        open->isr_block_index);
-
-    if (fa_hw_stopped(hw))
-    {
-        /* This is the last interrupt.  All we need to do is let
-         * fa_sniffer_release() know that DMA is over and clean up can
-         * complete.
-         *    We only come here if stop_fa_hw() has been called, which means
-         * that either the file handle has been closed or we detected an
-         * overrun.  Either way, the open() call needs no further
-         * notification. */
-        printk(KERN_ERR "fa_sniffer: signalling ISR done\n");
-        complete(&open->isr_done);
-    }
-    else
+    int status = fa_hw_status(hw);
+    if (status & FA_STATUS_DATA_OK)
     {
         /* Normal DMA complete interrupt, data in hand is ready: set up the
          * next transfer and let the read know that there's data to read. */
-        struct pci_dev *pdev = open->fa_sniffer->pdev;
-    
-        int filled_ix = open->isr_block_index;
-        int fresh_ix = step_index(filled_ix, 2);
-
+        struct fa_block *filled_block = & open->buffers[filled_ix];
         pci_dma_sync_single_for_cpu(pdev, 
-            open->buffers[filled_ix].dma, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
+            filled_block->dma, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
         smp_wmb();
-        open->buffers[filled_ix].state = fa_block_data;
-
+        filled_block->state = fa_block_data;
+        
+        if (status & 0xff)
+            printk(KERN_DEBUG "ISR Running behind: %08x\n", status);
+    }
+    
+    if ((status & FA_STATUS_STOPPED) == 0)
+    {
+        /* DMA transfer still in progress.  Set up a new DMA buffer. */
+        int fresh_ix = step_index(filled_ix, 2);
+        struct fa_block *fresh_block = & open->buffers[fresh_ix];
+        
         smp_rmb();
-        if (open->buffers[fresh_ix].state == fa_block_free)
+        if (fresh_block->state == fa_block_free)
         {
             pci_dma_sync_single_for_device(pdev, 
-                open->buffers[fresh_ix].dma, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
-            set_dma_buffer(hw, open->a_or_b, open->buffers[fresh_ix].dma);
-            open->buffers[fresh_ix].state = fa_block_dma;
-
-            /* Move through the circular buffer. */
+                fresh_block->dma, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
+            set_dma_buffer(hw, fresh_block->dma);
+            fresh_block->state = fa_block_dma;
             open->isr_block_index = step_index(filled_ix, 1);
-            open->a_or_b = ! open->a_or_b;
         }
         else
         {
             /* Whoops: the next buffer isn't free, better stop the hardware
              * right away! */
-            printk(KERN_ERR "fa_sniffer: Data buffer overrun in IRQ\n");
+            printk(KERN_NOTICE
+                "fa_sniffer: Data buffer overrun in IRQ (%08x, %d, %d, %d)\n",
+                status, fresh_block->state,
+                open->isr_block_index, open->read_block_index);
             stop_fa_hw(hw);
-            open->overrun_detected = true;
+            open->stopped = true;
         }
-
-        /* There should be a read() waiting to hear from us. */
-        wake_up_interruptible(&open->wait_queue);
+    }
+    else
+    {
+        /* This is the last interrupt, we need to let fa_sniffer_release()
+         * know that DMA is over and clean up can complete. */
+        printk(KERN_DEBUG "fa_sniffer: signalling ISR done (%08x)\n", status);
+        open->stopped = true;
+        complete(&open->isr_done);
     }
 
-    fa_int_ack(hw);
-    open->isr_count += 1;
+    /* Wake up any pending reads. */
+    wake_up_interruptible(&open->wait_queue);
     return IRQ_HANDLED;
 }
 
@@ -415,21 +413,19 @@ static int fa_sniffer_open(struct inode *inode, struct file *file)
 
     if (test_and_set_bit(0, &fa_sniffer->open_flag))
         /* No good, the device is already open. */
-        return -EINVAL;
+        return -EBUSY;
 
     int rc = 0;
     struct fa_sniffer_open *open = kmalloc(sizeof(*open), GFP_KERNEL);
     TEST_PTR(rc, open, no_open, "Unable to allocate open structure");
 
     init_waitqueue_head(&open->wait_queue);
-    open->a_or_b = true;
     open->isr_block_index = 0;
     init_completion(&open->isr_done);
-    open->overrun_detected = false;
+    open->stopped = false;
     open->read_block_index = 0;
     open->read_offset = 0;
     open->fa_sniffer = fa_sniffer;
-    open->isr_count = 0;
     file->private_data = open;
 
     /* Prepare the circular buffer. */
@@ -439,10 +435,13 @@ static int fa_sniffer_open(struct inode *inode, struct file *file)
         /* We ask for "cache cold" pages just to optimise things, as these
          * pages won't be read without DMA first.  We allocate free pages
          * (rather than using kmalloc) as this appears to be a better match to
-         * our application. */
+         * our application.
+         *    Seems that this one returns 0 rather than an error pointer
+         * on failure. */
         block->block = (void *) __get_free_pages(
             GFP_KERNEL | __GFP_COLD, FA_BLOCK_SHIFT - PAGE_SHIFT);
-        TEST_PTR(rc, block->block, no_block, "Unable to allocate buffer");
+        TEST_((unsigned long) block->block == 0, rc = -ENOMEM,
+            no_block, "Unable to allocate buffer");
 
         /* Map each block for DMA. */
         block->dma = pci_map_single(
@@ -455,17 +454,18 @@ static int fa_sniffer_open(struct inode *inode, struct file *file)
     open->buffers[0].state = fa_block_dma;
     open->buffers[1].state = fa_block_dma;
 
-    prepare_dma(fa_sniffer->hw, FA_BLOCK_FRAMES, 0);
-    /* Prepare the initial hardware DMA buffers. */
-    set_dma_buffer(fa_sniffer->hw, true,  open->buffers[0].dma);
-    set_dma_buffer(fa_sniffer->hw, false, open->buffers[1].dma);
-
+    prepare_dma(fa_sniffer->hw, FA_BLOCK_FRAMES);
+    
     /* Set up the interrupt routine and start things off. */
     rc = request_irq(
         pdev->irq, fa_sniffer_isr,
         IRQF_SHARED, "fa_sniffer", open);
     TEST_RC(rc, no_irq, "Unable to request irq");
+    
+    /* Prepare the initial hardware DMA buffers. */
+    set_dma_buffer(fa_sniffer->hw, open->buffers[0].dma);
     start_fa_hw(fa_sniffer->hw);
+    set_dma_buffer(fa_sniffer->hw, open->buffers[1].dma);
 
     return 0;
 
@@ -498,13 +498,10 @@ static int fa_sniffer_release(struct inode *inode, struct file *file)
     struct pci_dev *pdev = fa_sniffer->pdev;
     struct fa_sniffer_open *open = file->private_data;
 
-    printk(KERN_ERR "stopping FA hw\n");
     stop_fa_hw(fa_sniffer->hw);
     /* This wait must not be interruptible, as the pages below cannot be
      * safely released until the last ISR has been received. */
     wait_for_completion(&open->isr_done);
-
-    printk(KERN_ERR "freeing irq, count = %d\n", open->isr_count);
     free_irq(pdev->irq, open);
 
     int blk;
@@ -534,10 +531,10 @@ static ssize_t fa_sniffer_read(
             & open->buffers[open->read_block_index];
         smp_rmb();
         rc = wait_event_interruptible(open->wait_queue,
-            block->state == fa_block_data  ||  open->overrun_detected);
+            block->state == fa_block_data  ||  open->stopped);
         TEST_RC(rc, failed, "read interrupted");
         TEST_(block->state != fa_block_data,
-            rc = -EIO, failed, "No data available, data overrun");
+            rc = -EIO, failed, "No data available, data overrun?");
 
         /* Copy as much data as needed and available out of the current block,
          * and advance all our buffers and pointers. */
@@ -649,7 +646,7 @@ static int __devinit fa_sniffer_probe(
     rc = cdev_add(&fa_sniffer->cdev, fa_sniffer_devt, 1);
     TEST_RC(rc, no_cdev, "Unable to register device");
 
-    printk(KERN_ERR "fa_sniffer loaded\n");
+    printk(KERN_INFO "fa_sniffer loaded\n");
     return 0;
 
 no_cdev:
@@ -674,7 +671,7 @@ static void __devexit fa_sniffer_remove(struct pci_dev *pdev)
     release_fa_hw(pdev, fa_sniffer->hw);
     kfree(fa_sniffer);
     fa_sniffer_disable(pdev);
-    printk(KERN_ERR "fa_sniffer unloaded\n");
+    printk(KERN_INFO "fa_sniffer unloaded\n");
 }
 
 
@@ -704,6 +701,7 @@ static int __init fa_sniffer_init(void)
 
     rc = pci_register_driver(&fa_sniffer_driver);
     TEST_RC(rc, no_driver, "Unable to register driver");
+    printk(KERN_INFO "Installed FA module\n");
     return rc;
 
 no_driver:
@@ -719,6 +717,7 @@ static void __exit fa_sniffer_exit(void)
     pci_unregister_driver(&fa_sniffer_driver);
     unregister_chrdev_region(fa_sniffer_devt, 1);
     class_destroy(fa_sniffer_class);
+    printk(KERN_INFO "Removed FA module\n");
 }
 
 
