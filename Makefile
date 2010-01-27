@@ -23,6 +23,4 @@ clean:
 	rm -f Module.markers Module.symvers
 
 test: # all
-	sudo /sbin/insmod ./fa_sniffer.ko
-	sudo dd if=/dev/fa_sniffer bs=$(SIZE) count=$(COUNT) >$(FILE)
-	sudo /sbin/rmmod ./fa_sniffer.ko
+	sudo ./runtest bs=$(SIZE) count=$(COUNT) >$(FILE)

@@ -1,0 +1,9 @@
+#!/bin/sh
+
+cd "$(dirname "$0")"
+trap '/sbin/rmmod ./fa_sniffer.ko' EXIT
+
+if /sbin/insmod ./fa_sniffer.ko; then
+    sleep 0.1   # Allow device time to install itself!
+    dd if=/dev/fa_sniffer0 "$@"
+fi

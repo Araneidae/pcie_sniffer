@@ -139,7 +139,9 @@ static int initialise_fa_hw(struct pci_dev *pdev, struct fa_sniffer_hw **hw)
     (*hw)->regs = regs;
     (*hw)->tlp_size = DMAGetMaxPacketSize(regs);
 
-    printk(KERN_INFO "FA version %08x\n", regs->dcsr);
+    int ver = readl(&regs->dcsr);
+    printk(KERN_INFO "FA sniffer firmware v%d.%02x.%d\n",
+        (ver >> 12) & 0xf, (ver >> 4) & 0xff, ver & 0xf);
 
     /* Now restart the communication controller: needed at present to work
      * around a controller defect. */
@@ -220,8 +222,10 @@ static void start_fa_hw(struct fa_sniffer_hw *hw)
      *  1       Stop DMA
      *  0       Write DMA start. */
 //    u32 control = (1 << 6) | (1 << 5) | (1 << 0);
-//    u32 control = (1 << 6) | (1 << 0);
-    u32 control = 1;
+    /* Unfortunately it would seem that, at least on 2.6.18, explicit DMA
+     * cache synchronisation just plain doesn't work.  So leave DMA cache
+     * snooping on, but at least we can allow relaxed transfer ordering. */
+    u32 control = (1 << 5) | (1 << 0);
     writel(control, &hw->regs->ddmacr);
 }
 
@@ -233,15 +237,15 @@ static void stop_fa_hw(struct fa_sniffer_hw *hw)
 }
 
 /* Read status associated with latest interrupt.  Returns current frame count
- * in bottom byte, returns DMA transfer status in bits 11:8 thus:
+ * in bottom byte, returns DMA transfer status in bits 3:0 thus:
  *  ...1    Buffer finished, new DMA in progress (normal condition)
  *  000.    DMA still in progress
  *  xxx.    DMA halted, reason code one of:
  *      1    No valid DMA address (stopped)
  *      2    Explicit user stop (stopped)
  *      4    Communication controller timed out (stopped). */
-#define FA_STATUS_DATA_OK       0x100   // DMA still in progress
-#define FA_STATUS_STOPPED       0xE00   // If non zero, DMA halted
+#define FA_STATUS_DATA_OK       0x1     // DMA still in progress
+#define FA_STATUS_STOPPED       0xE     // If non zero, DMA halted
 static int fa_hw_status(struct fa_sniffer_hw *hw)
 {
     return readl(&hw->regs->wdmastatus);
@@ -278,10 +282,6 @@ static int fa_hw_status(struct fa_sniffer_hw *hw)
  *  |       |
  *  |       | read() completes, marks block as free
  *  +-------+
- *
- * The transition dma -> data is observed by wait_event_interruptible(), so
- * hopefully the necessary memory barriers should be in place; the transition
- * data -> free is observed by the ISR and probably needs guarding.
  */
 
 /* We specify the size of a single FA block as a power of 2 (because we're
@@ -358,9 +358,6 @@ static irqreturn_t fa_sniffer_isr(
             filled_block->dma, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
         smp_wmb();
         filled_block->state = fa_block_data;
-        
-        if (status & 0xff)
-            printk(KERN_DEBUG "ISR Running behind: %08x\n", status);
     }
     
     if ((status & FA_STATUS_STOPPED) == 0)
@@ -372,6 +369,9 @@ static irqreturn_t fa_sniffer_isr(
         smp_rmb();
         if (fresh_block->state == fa_block_free)
         {
+            /* Alas on our target system this function seems to do nothing
+             * whatsoever.  Hopefully we'll have a working implementation one
+             * day... */
             pci_dma_sync_single_for_device(pdev, 
                 fresh_block->dma, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
             set_dma_buffer(hw, fresh_block->dma);
@@ -382,10 +382,8 @@ static irqreturn_t fa_sniffer_isr(
         {
             /* Whoops: the next buffer isn't free, better stop the hardware
              * right away! */
-            printk(KERN_NOTICE
-                "fa_sniffer: Data buffer overrun in IRQ (%08x, %d, %d, %d)\n",
-                status, fresh_block->state,
-                open->isr_block_index, open->read_block_index);
+            printk(KERN_DEBUG
+                "fa_sniffer: Data buffer overrun in IRQ (%08x)\n", status);
             stop_fa_hw(hw);
             open->stopped = true;
         }
@@ -582,8 +580,29 @@ static struct file_operations fa_sniffer_fops = {
 /*                       Device and Module Initialisation                    */
 /*****************************************************************************/
 
+#define FA_SNIFFER_MAX_MINORS   32
+
 static struct class * fa_sniffer_class;
-static dev_t fa_sniffer_devt;   // Only one card at a time supported right now
+static unsigned int fa_sniffer_major;
+static unsigned long fa_sniffer_minors;  /* Bit mask of allocated minors */
+
+
+static int get_free_minor(unsigned int *minor)
+{
+    int bit;
+    for (bit = 0; bit < FA_SNIFFER_MAX_MINORS; bit ++) {
+        if (test_and_set_bit(bit, &fa_sniffer_minors) == 0) {
+            *minor = bit;
+            return 0;
+        }
+    }
+    return -EIO;
+}
+
+static void release_minor(unsigned int minor)
+{
+    test_and_clear_bit(minor, &fa_sniffer_minors);
+}
 
 
 static int fa_sniffer_enable(struct pci_dev *pdev)
@@ -624,7 +643,11 @@ static void fa_sniffer_disable(struct pci_dev *pdev)
 static int __devinit fa_sniffer_probe(
     struct pci_dev *pdev, const struct pci_device_id *id)
 {
-    int rc = fa_sniffer_enable(pdev);
+    unsigned int minor;
+    int rc = get_free_minor(&minor);
+    TEST_RC(rc, no_minor, "Unable to allocate minor device number");
+    
+    rc = fa_sniffer_enable(pdev);
     if (rc < 0)     goto no_sniffer;
 
     struct fa_sniffer *fa_sniffer = kmalloc(sizeof(*fa_sniffer), GFP_KERNEL);
@@ -638,19 +661,20 @@ static int __devinit fa_sniffer_probe(
     if (rc < 0)     goto no_hw;
 
     struct device * dev = device_create(
-        fa_sniffer_class, &pdev->dev, fa_sniffer_devt, "fa_sniffer");
+        fa_sniffer_class, &pdev->dev,
+        MKDEV(fa_sniffer_major, minor), "fa_sniffer%d", minor);
     TEST_PTR(rc, dev, no_device, "Unable to create device");
 
     cdev_init(&fa_sniffer->cdev, &fa_sniffer_fops);
     fa_sniffer->cdev.owner = THIS_MODULE;
-    rc = cdev_add(&fa_sniffer->cdev, fa_sniffer_devt, 1);
+    rc = cdev_add(&fa_sniffer->cdev, MKDEV(fa_sniffer_major, minor), 1);
     TEST_RC(rc, no_cdev, "Unable to register device");
 
     printk(KERN_INFO "fa_sniffer loaded\n");
     return 0;
 
 no_cdev:
-    device_destroy(fa_sniffer_class, fa_sniffer_devt);
+    device_destroy(fa_sniffer_class, MKDEV(fa_sniffer_major, minor));
 no_device:
     release_fa_hw(pdev, fa_sniffer->hw);
 no_hw:
@@ -658,6 +682,8 @@ no_hw:
 no_memory:
     fa_sniffer_disable(pdev);
 no_sniffer:
+    release_minor(minor);
+no_minor:
     return rc;
 }
 
@@ -665,12 +691,15 @@ no_sniffer:
 static void __devexit fa_sniffer_remove(struct pci_dev *pdev)
 {
     struct fa_sniffer *fa_sniffer = pci_get_drvdata(pdev);
+    unsigned int minor = MINOR(fa_sniffer->cdev.dev);
 
     cdev_del(&fa_sniffer->cdev);
     device_destroy(fa_sniffer_class, fa_sniffer->cdev.dev);
     release_fa_hw(pdev, fa_sniffer->hw);
     kfree(fa_sniffer);
     fa_sniffer_disable(pdev);
+    release_minor(minor);
+    
     printk(KERN_INFO "fa_sniffer unloaded\n");
 }
 
@@ -696,16 +725,19 @@ static int __init fa_sniffer_init(void)
     fa_sniffer_class = class_create(THIS_MODULE, "fa_sniffer");
     TEST_PTR(rc, fa_sniffer_class, no_class, "Unable to create class");
 
-    rc = alloc_chrdev_region(&fa_sniffer_devt, 0, 1, "fa_sniffer");
+    dev_t dev;
+    rc = alloc_chrdev_region(&dev, 0, FA_SNIFFER_MAX_MINORS, "fa_sniffer");
     TEST_RC(rc, no_chrdev, "Unable to allocate device");
-
+    fa_sniffer_major = MAJOR(dev);
+    fa_sniffer_minors = 0;
+    
     rc = pci_register_driver(&fa_sniffer_driver);
     TEST_RC(rc, no_driver, "Unable to register driver");
     printk(KERN_INFO "Installed FA module\n");
     return rc;
 
 no_driver:
-    unregister_chrdev_region(fa_sniffer_devt, 1);
+    unregister_chrdev_region(fa_sniffer_major, FA_SNIFFER_MAX_MINORS);
 no_chrdev:
     class_destroy(fa_sniffer_class);
 no_class:
@@ -715,7 +747,7 @@ no_class:
 static void __exit fa_sniffer_exit(void)
 {
     pci_unregister_driver(&fa_sniffer_driver);
-    unregister_chrdev_region(fa_sniffer_devt, 1);
+    unregister_chrdev_region(fa_sniffer_major, FA_SNIFFER_MAX_MINORS);
     class_destroy(fa_sniffer_class);
     printk(KERN_INFO "Removed FA module\n");
 }
