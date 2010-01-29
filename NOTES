@@ -1,0 +1,33 @@
+FA Sniffer
+==========
+
+udev Configuration
+------------------
+
+The following line works for udev in `/etc/udev/rules.d/10-local.rules`:
+
+----
+SUBSYSTEM=="fa_sniffer", MODE="0444", OPTIONS="last_rule"
+----
+
+For some reason we need to set `last_rule`, otherwise this rule doesn't get
+applied.
+
+See http://reactivated.net/writing_udev_rules.html[] for documentation on udev
+rules.  Some useful programs noted there:
+
+`udevtest`:: 
+Given path to sysfs node ('without' the leading `/sys`) prints the udev rules
+that will be applied.  For example:
++
+----
+udevtest /class/fa_sniffer/fa_sniffer0
+----
+
+`udevinfo`::
+Walks sysfs tree printing information about the device as understood by udev.
+In this case the actual path must be passed.  For example:
++
+----
+udevinfo -a -p /sys/class/fa_sniffer/fa_sniffer0
+----

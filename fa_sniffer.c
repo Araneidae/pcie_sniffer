@@ -1,4 +1,14 @@
-/* Kernel driver for Communication Controller FA sniffer. */
+/* Kernel driver for Communication Controller FA sniffer.
+ * 
+ * Copyright (C) 2010  Michael Abbott, Diamond Light Source Ltd.
+ *
+ * The FA sniffer card captures a stream of Fast Acquisition frames from the
+ * FA network and writes them to memory using PCIe DMA transfer.  
+ * A new frame arrives every 100 microseconds, and the sniffer has no control
+ * over this data stream.
+ *
+ * The driver here endeavours to capture every frame arriving after a file
+ * open call on the FA sniffer device. */
 
 #include <linux/module.h>
 #include <linux/device.h>
@@ -19,8 +29,7 @@ MODULE_VERSION("0.1-dev");
 
 /* If test is true then do on_error, print message and goto target. */
 #define TEST_(test, on_error, target, message) \
-    do if (test) \
-    { \
+    do if (test) { \
         on_error; \
         printk(KERN_ERR "fa_sniffer: " message "\n"); \
         goto target; \
@@ -43,15 +52,9 @@ MODULE_VERSION("0.1-dev");
 /*                      FA Sniffer Hardware Definitions                      */
 /*****************************************************************************/
 
-/* The FA sniffer card captures a stream of Fast Acquisition frames from the
- * FA network and writes them to memory using PCIe DMA transfer.  Each frame
- * consists of 256 (X,Y) position pairs stored as a sequence of 256 X
- * positions followed by 256 Y positions, each position being a 4 byte integer.
- * A new frame arrives every 100 microseconds.
- *
- * The driver here endeavours to capture every frame arriving after a file
- * open call on the FA sniffer device. */
-
+/* Each frame consists of 256 (X,Y) position pairs stored as a sequence of 256
+ * X positions followed by 256 Y positions, each position being a 4 byte
+ * integer. */
 #define FA_FRAME_SIZE   2048    // 256 * (X,Y), 4 bytes each
 
 
@@ -227,6 +230,8 @@ static void start_fa_hw(struct fa_sniffer_hw *hw)
      * snooping on, but at least we can allow relaxed transfer ordering. */
     u32 control = (1 << 5) | (1 << 0);
     writel(control, &hw->regs->ddmacr);
+    /* Ensure further writes now come after start. */
+    readl(&hw->regs->dcsr);
 }
 
 /* Stop DMA transfers as soon as possible, at the very least after the
@@ -241,9 +246,14 @@ static void stop_fa_hw(struct fa_sniffer_hw *hw)
  *  ...1    Buffer finished, new DMA in progress (normal condition)
  *  000.    DMA still in progress
  *  xxx.    DMA halted, reason code one of:
- *      1    No valid DMA address (stopped)
- *      2    Explicit user stop (stopped)
- *      4    Communication controller timed out (stopped). */
+ *      1    No valid DMA address
+ *      2    Explicit user stop request
+ *      4    Communication controller timed out
+ *
+ * The device guarantees that the last interrupt generated in response to a
+ * sequence of DMA transfers will have a non zero STOPPED code and that this
+ * interrupt will arrive in a timely way.  Thus we can safely synchronise on
+ * the stop code for cleaning up resources used by hardware. */
 #define FA_STATUS_DATA_OK       0x1     // DMA still in progress
 #define FA_STATUS_STOPPED       0xE     // If non zero, DMA halted
 static int fa_hw_status(struct fa_sniffer_hw *hw)
@@ -286,7 +296,7 @@ static int fa_hw_status(struct fa_sniffer_hw *hw)
 
 /* We specify the size of a single FA block as a power of 2 (because we're
  * going to allocate the block with __get_free_page(). */
-#define FA_BLOCK_SHIFT      20      // 2**20 = 1M
+#define FA_BLOCK_SHIFT      19      // 2**19 = 512K
 #define FA_BLOCK_SIZE       (1 << FA_BLOCK_SHIFT)
 #define FA_BUFFER_COUNT     5
 #define FA_BLOCK_FRAMES     (FA_BLOCK_SIZE / FA_FRAME_SIZE)
@@ -349,49 +359,42 @@ static irqreturn_t fa_sniffer_isr(
     int filled_ix = open->isr_block_index;
 
     int status = fa_hw_status(hw);
-    if (status & FA_STATUS_DATA_OK)
-    {
+    if (status & FA_STATUS_DATA_OK) {
         /* Normal DMA complete interrupt, data in hand is ready: set up the
          * next transfer and let the read know that there's data to read. */
         struct fa_block *filled_block = & open->buffers[filled_ix];
         pci_dma_sync_single_for_cpu(pdev, 
             filled_block->dma, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
-        smp_wmb();
+        smp_wmb();  // Guards DMA transfer for block we've just read
         filled_block->state = fa_block_data;
     }
     
-    if ((status & FA_STATUS_STOPPED) == 0)
-    {
+    if ((status & FA_STATUS_STOPPED) == 0) {
         /* DMA transfer still in progress.  Set up a new DMA buffer. */
         int fresh_ix = step_index(filled_ix, 2);
         struct fa_block *fresh_block = & open->buffers[fresh_ix];
         
-        smp_rmb();
-        if (fresh_block->state == fa_block_free)
-        {
-            /* Alas on our target system this function seems to do nothing
-             * whatsoever.  Hopefully we'll have a working implementation one
-             * day... */
+        smp_rmb();  // Guards copy_to_user for free block.
+        if (fresh_block->state == fa_block_free) {
+            /* Alas on our target system (2.6.18) this function seems to do
+             * nothing whatsoever.  Hopefully we'll have a working
+             * implementation one day... */
             pci_dma_sync_single_for_device(pdev, 
                 fresh_block->dma, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
             set_dma_buffer(hw, fresh_block->dma);
             fresh_block->state = fa_block_dma;
             open->isr_block_index = step_index(filled_ix, 1);
-        }
-        else
-        {
-            /* Whoops: the next buffer isn't free, better stop the hardware
-             * right away! */
+        } else
+            /* Whoops: the next buffer isn't free.  Never mind.  The hardware
+             * will stop as soon as the current block is full and we'll get a
+             * STOPPED interrupt.  Let the reader consume the current block
+             * first. */
             printk(KERN_DEBUG
                 "fa_sniffer: Data buffer overrun in IRQ (%08x)\n", status);
-            stop_fa_hw(hw);
-            open->stopped = true;
-        }
-    }
-    else
-    {
-        /* This is the last interrupt, we need to let fa_sniffer_release()
-         * know that DMA is over and clean up can complete. */
+    } else {
+        /* This is the last interrupt.  Let the reader know that there's
+         * nothing more coming, and let fa_sniffer_release() know that DMA is
+         * over and clean up can complete. */
         printk(KERN_DEBUG "fa_sniffer: signalling ISR done (%08x)\n", status);
         open->stopped = true;
         complete(&open->isr_done);
@@ -522,27 +525,27 @@ static ssize_t fa_sniffer_read(
 {
     struct fa_sniffer_open *open = file->private_data;
     size_t copied = 0;
-    int rc = 0;
     while (count > 0) {
-        /* Wait for data to arrive in the current block. */
-        struct fa_block * block =
-            & open->buffers[open->read_block_index];
-        smp_rmb();
-        rc = wait_event_interruptible(open->wait_queue,
+        /* Wait for data to arrive in the current block.  We can be
+         * interrupted by a process signal, or can detect end of input, due
+         * to either buffer overrun or communication controller timeout. */
+        struct fa_block * block = & open->buffers[open->read_block_index];
+        smp_rmb();  // Guards DMA transfer for new data block
+        int rc = wait_event_interruptible(open->wait_queue,
             block->state == fa_block_data  ||  open->stopped);
-        TEST_RC(rc, failed, "read interrupted");
-        TEST_(block->state != fa_block_data,
-            rc = -EIO, failed, "No data available, data overrun?");
+        if (rc < 0)
+            return rc;
+        if (block->state != fa_block_data)
+            return -EIO;
 
         /* Copy as much data as needed and available out of the current block,
          * and advance all our buffers and pointers. */
         size_t read_offset = open->read_offset;
         size_t copy_count = FA_BLOCK_SIZE - read_offset;
         if (copy_count > count)  copy_count = count;
-        TEST_(
-            copy_to_user(buf,
-                (char *) block->block + read_offset, copy_count) != 0,
-            rc = -EFAULT, failed, "Unable to copy data to user");
+        if (copy_to_user(buf,
+                (char *) block->block + read_offset, copy_count) != 0)
+            return -EFAULT;
 
         copied += copy_count;
         count -= copy_count;
@@ -550,20 +553,15 @@ static ssize_t fa_sniffer_read(
         open->read_offset += copy_count;
 
         /* If the current block has been consumed then move on to the next
-         * block. */
+         * block, marking this block as free for the interrupt routine. */
         if (open->read_offset >= FA_BLOCK_SIZE) {
             open->read_offset = 0;
-            open->read_block_index =
-                step_index(open->read_block_index, 1);
-            smp_wmb();
+            open->read_block_index = step_index(open->read_block_index, 1);
+            smp_wmb();  // Guards copy_to_user for block we're freeing
             block->state = fa_block_free;
         }
     }
-
     return copied;
-    
-failed:
-    return rc;
 }
 
 
@@ -683,7 +681,6 @@ static int __devinit fa_sniffer_probe(
         MKDEV(fa_sniffer_major, minor), "fa_sniffer%d", minor);
     TEST_PTR(rc, dev, no_device, "Unable to create device");
 
-    printk(KERN_ERR "device_create: %p %p %p\n", pdev, dev, &pdev->dev);
     rc = device_create_file(&pdev->dev, &dev_attr_firmware);
     TEST_RC(rc, no_attr, "Unable to create attr");
 
