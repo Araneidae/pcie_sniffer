@@ -11,6 +11,7 @@
  * open call on the FA sniffer device. */
 
 #include <linux/module.h>
+#include <linux/version.h>
 #include <linux/device.h>
 #include <linux/fs.h>
 #include <linux/cdev.h>
@@ -374,8 +375,8 @@ static irqreturn_t fa_sniffer_isr(
         int fresh_ix = step_index(filled_ix, 2);
         struct fa_block *fresh_block = & open->buffers[fresh_ix];
         
-        smp_rmb();  // Guards copy_to_user for free block.
         if (fresh_block->state == fa_block_free) {
+            smp_rmb();  // Guards copy_to_user for free block.
             /* Alas on our target system (2.6.18) this function seems to do
              * nothing whatsoever.  Hopefully we'll have a working
              * implementation one day... */
@@ -530,7 +531,6 @@ static ssize_t fa_sniffer_read(
          * interrupted by a process signal, or can detect end of input, due
          * to either buffer overrun or communication controller timeout. */
         struct fa_block * block = & open->buffers[open->read_block_index];
-        smp_rmb();  // Guards DMA transfer for new data block
         int rc = wait_event_interruptible(open->wait_queue,
             block->state == fa_block_data  ||  open->stopped);
         if (rc < 0)
@@ -540,6 +540,7 @@ static ssize_t fa_sniffer_read(
 
         /* Copy as much data as needed and available out of the current block,
          * and advance all our buffers and pointers. */
+        smp_rmb();  // Guards DMA transfer for new data block
         size_t read_offset = open->read_offset;
         size_t copy_count = FA_BLOCK_SIZE - read_offset;
         if (copy_count > count)  copy_count = count;
@@ -621,7 +622,9 @@ static int fa_sniffer_enable(struct pci_dev *pdev)
     return 0;
 
 no_msi:
-//    pci_clear_master(pdev);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,29)
+    pci_clear_master(pdev);
+#endif
     pci_release_regions(pdev);
 no_regions:
     pci_disable_device(pdev);
@@ -632,7 +635,9 @@ no_device:
 static void fa_sniffer_disable(struct pci_dev *pdev)
 {
     pci_disable_msi(pdev);
-//    pci_clear_master(pdev);       // On more recent kernels
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,29)
+    pci_clear_master(pdev);
+#endif
     pci_release_regions(pdev);
     pci_disable_device(pdev);
 }
@@ -678,7 +683,11 @@ static int __devinit fa_sniffer_probe(
 
     struct device * dev = device_create(
         fa_sniffer_class, &pdev->dev,
-        MKDEV(fa_sniffer_major, minor), "fa_sniffer%d", minor);
+        MKDEV(fa_sniffer_major, minor),
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,27)
+        NULL,
+#endif
+        "fa_sniffer%d", minor);
     TEST_PTR(rc, dev, no_device, "Unable to create device");
 
     rc = device_create_file(&pdev->dev, &dev_attr_firmware);
