@@ -137,18 +137,18 @@ void wait(pthread_cond_t *cond)
 void * reader_thread(void *context)
 {
     int fa_sniffer;
-    if (TEST_IO(
+    if (TEST_IO_(
         fa_sniffer = open(fa_sniffer_device, O_RDONLY),
         "Can't open sniffer device %s", fa_sniffer_device))
     {
         ssize_t bytes_read;
         while (
             reader_running  &&
-            TEST_IO(
+            TEST_IO_(
                 bytes_read = read(fa_sniffer,
                     frame_buffer + buffer_index_in, FA_BLOCK_SIZE),
                 "error reading sniffer, probable buffer overrun")  &&
-            TEST_OK(bytes_read == FA_BLOCK_SIZE,
+            TEST_OK_(bytes_read == FA_BLOCK_SIZE,
                 "unexpected short read: %d should be %d",
                 bytes_read, FA_BLOCK_SIZE))
         {
@@ -164,7 +164,8 @@ void * reader_thread(void *context)
             if (size > max_size)  max_size = size;
             unlock();
             
-            if (!TEST_OK(size + FA_BLOCK_SIZE < buffer_size, "buffer overrun"))
+            if (!TEST_OK_(size + FA_BLOCK_SIZE < buffer_size,
+                    "buffer overrun"))
                 /* Oops.  Out of room.  Could hope and pray that the writer
                  * will catch up before we run out of luck, but frankly that
                  * prospect is pretty bleak -- just give up. */
@@ -198,7 +199,7 @@ bool write_block(int file, size_t size)
 
     ssize_t written;
     bool ok =
-        TEST_IO(
+        TEST_IO_(
             written = write(file, frame_buffer + buffer_index_out, size),
             "Error writing output file")  &&
         written > 0;
@@ -215,7 +216,7 @@ bool write_block(int file, size_t size)
 void writer_thread(void)
 {
     int output;
-    if (TEST_IO(
+    if (TEST_IO_(
         output = open(output_file,
             O_WRONLY | O_TRUNC | O_CREAT | O_LARGEFILE, 0664),
         "Unable to open output file \"%s\"", output_file))
@@ -252,13 +253,13 @@ bool read_uint(char *string, unsigned int *result)
 {
     char *end;
     *result = strtoul(string, &end, 0);
-    if (TEST_OK(end > string, "nothing specified for option")) {
+    if (TEST_OK_(end > string, "nothing specified for option")) {
         switch (*end) {
             case 'K':   end++;  *result *= K;           break;
             case 'M':   end++;  *result *= K * K;       break;
             case '\0':  break;
         }
-        return TEST_OK(*end == '\0',
+        return TEST_OK_(*end == '\0',
             "Unexpected characters in integer \"%s\"", string);
     } else
         return false;
@@ -270,10 +271,10 @@ bool read_id(char *original, char **string, int *id)
     char *next;
     *id = strtol(*string, &next, 0);
     return
-        TEST_OK(next > *string,
+        TEST_OK_(next > *string,
             "Number missing at \"%s\" (+%d)", original, *string - original)  &&
         DO_(*string = next)  &&
-        TEST_OK(0 <= *id  &&  *id < 256, "id %d out of range", *id);
+        TEST_OK_(0 <= *id  &&  *id < 256, "id %d out of range", *id);
 }
 
 bool read_filter(char *string, filter_mask_t mask)
@@ -307,7 +308,7 @@ bool read_filter(char *string, filter_mask_t mask)
 
     return
         ok  &&
-        TEST_OK(*string == '\0',
+        TEST_OK_(*string == '\0',
             "Unexpected characters at \"%s\" (+%d)",
             original, string - original);
 }
@@ -367,8 +368,8 @@ void run_archiver(void)
     /* Convert buffer size into an integral multiple of FA_BLOCK_SIZE. */
     size_t block_count = buffer_size / FA_BLOCK_SIZE;
     buffer_size = block_count * FA_BLOCK_SIZE;
-    if (TEST_OK(block_count > 1, "buffer size is too small")  &&
-        TEST_NULL(
+    if (TEST_OK_(block_count > 1, "buffer size is too small")  &&
+        TEST_NULL_(
             frame_buffer = malloc(buffer_size),
             "Cannot allocate %u bytes for buffer", buffer_size))
     {
