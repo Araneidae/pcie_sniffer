@@ -88,6 +88,7 @@ struct x5pcie_dma_registers {
     u32 dummy[13];    /* 0x4C-0x7F Reserved Address Space */
     u32 ccfaicfgval;  /* Ox80 CC FAI configuration register */
     u32 wdmastatus;   /* 0x84 WDMA status register */
+    u32 linkstatus;   /* 0x88 Link status register */
 };
 
 struct fa_sniffer_hw {
@@ -316,6 +317,7 @@ struct fa_sniffer {
     struct pci_dev *pdev;       // Parent PCI device
     struct fa_sniffer_hw *hw;   // Hardware resources
     unsigned long open_flag;    // Interlock: only one open at a time!
+    int last_interrupt;         // Status word from last interrupt
 };
 
 struct fa_sniffer_open {
@@ -360,6 +362,7 @@ static irqreturn_t fa_sniffer_isr(
     int filled_ix = open->isr_block_index;
 
     int status = fa_hw_status(hw);
+    open->fa_sniffer->last_interrupt = status;
     if (status & FA_STATUS_DATA_OK) {
         /* Normal DMA complete interrupt, data in hand is ready: set up the
          * next transfer and let the read know that there's data to read. */
@@ -396,7 +399,6 @@ static irqreturn_t fa_sniffer_isr(
         /* This is the last interrupt.  Let the reader know that there's
          * nothing more coming, and let fa_sniffer_release() know that DMA is
          * over and clean up can complete. */
-        printk(KERN_DEBUG "fa_sniffer: signalling ISR done (%08x)\n", status);
         open->stopped = true;
         complete(&open->isr_done);
     }
@@ -643,7 +645,7 @@ static void fa_sniffer_disable(struct pci_dev *pdev)
 }
 
 
-static ssize_t show_firmware_version(
+static ssize_t firmware_show(
     struct device *dev, struct device_attribute *attr, char *buf)
 {
     struct pci_dev *pdev = container_of(dev, struct pci_dev, dev);
@@ -653,7 +655,38 @@ static ssize_t show_firmware_version(
         (ver >> 12) & 0xf, (ver >> 4) & 0xff, ver & 0xf);
 }
 
-static DEVICE_ATTR(firmware, 0444, show_firmware_version, NULL);
+static ssize_t last_interrupt_show(
+    struct device *dev, struct device_attribute *attr, char *buf)
+{
+    struct pci_dev *pdev = container_of(dev, struct pci_dev, dev);
+    struct fa_sniffer *fa_sniffer = pci_get_drvdata(pdev);
+    return sprintf(buf, "%d\n", fa_sniffer->last_interrupt);
+}
+
+static ssize_t link_status_show(
+    struct device *dev, struct device_attribute *attr, char *buf)
+{
+    struct pci_dev *pdev = container_of(dev, struct pci_dev, dev);
+    struct fa_sniffer *fa_sniffer = pci_get_drvdata(pdev);
+    return sprintf(buf, "%d\n", readl(&fa_sniffer->hw->regs->linkstatus) & 3);
+}
+
+static ssize_t link_partner_show(
+    struct device *dev, struct device_attribute *attr, char *buf)
+{
+    struct pci_dev *pdev = container_of(dev, struct pci_dev, dev);
+    struct fa_sniffer *fa_sniffer = pci_get_drvdata(pdev);
+    return sprintf(buf, "%d\n",
+        (readl(&fa_sniffer->hw->regs->linkstatus) >> 8) & 0x3FF);
+}
+
+
+static struct device_attribute attributes[] = {
+    __ATTR_RO(firmware),
+    __ATTR_RO(last_interrupt),
+    __ATTR_RO(link_status),
+    __ATTR_RO(link_partner),
+};
 
 
 static int __devinit fa_sniffer_probe(
@@ -671,6 +704,7 @@ static int __devinit fa_sniffer_probe(
 
     fa_sniffer->open_flag = 0;
     fa_sniffer->pdev = pdev;
+    fa_sniffer->last_interrupt = 0;
     pci_set_drvdata(pdev, fa_sniffer);
 
     rc = initialise_fa_hw(pdev, &fa_sniffer->hw);
@@ -690,14 +724,23 @@ static int __devinit fa_sniffer_probe(
         "fa_sniffer%d", minor);
     TEST_PTR(rc, dev, no_device, "Unable to create device");
 
-    rc = device_create_file(&pdev->dev, &dev_attr_firmware);
-    TEST_RC(rc, no_attr, "Unable to create attr");
+    int i;
+    for (i = 0; i < (int) ARRAY_SIZE(attributes); i ++)
+    {
+        rc = device_create_file(&pdev->dev, &attributes[i]);
+        TEST_RC(rc, no_attr, "Unable to create attr");
+    }
 
     printk(KERN_INFO "fa_sniffer%d installed\n", minor);
     return 0;
 
-    device_remove_file(&pdev->dev, &dev_attr_firmware);
+
+    do {
+        device_remove_file(&pdev->dev, &attributes[i]);
 no_attr:
+        i --;
+    } while (i >= 0);
+
     device_destroy(fa_sniffer_class, MKDEV(fa_sniffer_major, minor));
 no_device:
     cdev_del(&fa_sniffer->cdev);
@@ -719,7 +762,9 @@ static void __devexit fa_sniffer_remove(struct pci_dev *pdev)
     struct fa_sniffer *fa_sniffer = pci_get_drvdata(pdev);
     unsigned int minor = MINOR(fa_sniffer->cdev.dev);
 
-    device_remove_file(&pdev->dev, &dev_attr_firmware);
+    unsigned i;
+    for (i = 0; i < ARRAY_SIZE(attributes); i ++)
+        device_remove_file(&pdev->dev, &attributes[i]);
     device_destroy(fa_sniffer_class, fa_sniffer->cdev.dev);
     cdev_del(&fa_sniffer->cdev);
     release_fa_hw(pdev, fa_sniffer->hw);
