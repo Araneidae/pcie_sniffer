@@ -95,7 +95,7 @@ struct fa_sniffer_hw {
     int tlp_size;   // Max length of single PCI DMA transfer (in bytes)
 };
 
-#define BAR0_LEN    8192
+#define BAR0_LEN    1024
 
 
 static int code2size(int bCode)
