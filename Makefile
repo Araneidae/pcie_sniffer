@@ -7,7 +7,7 @@ kbuild:
 	$(foreach file,$(KFILES), ln -s ../$(file) kbuild;)
 
 kbuild/fa_sniffer.ko: fa_sniffer.c kbuild
-	make -C /lib/modules/$(shell uname -r)/build M=$(PWD)/kbuild modules
+	make -C /lib/modules/$(shell uname -r)/build M=$(CURDIR)/kbuild modules
 
 tools:
 	make -C tools
