@@ -41,7 +41,7 @@ void print_error(const char * Message, ...)
 
 void panic_error(const char * filename, int line)
 {
-    fprintf(stderr, "panic at %s, line %d.\n", filename, line);
+    print_error("panic at %s, line %d", filename, line);
     fflush(stderr);
     _exit(255);
 }

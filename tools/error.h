@@ -2,7 +2,7 @@
 
 #define unlikely(x)   __builtin_expect((x), 0)
 
-void print_error(const char * Message, ...)
+void print_error(const char * message, ...)
     __attribute__((format(printf, 1, 2)));
 
 void panic_error(const char * filename, int line)
@@ -20,11 +20,7 @@ void panic_error(const char * filename, int line)
         __ok__; \
     } )
 
-/* Default error message for unexpected errors. */
-#define ERROR_MESSAGE   \
-    "Unexpected error at %s:%d", __FILE__, __LINE__
-
-/* An assert for tests that really really should not fail!  These exit
+/* An assert for tests that really really should not fail!  This exits
  * immediately. */
 #define ASSERT_(COND, expr)  \
     do { \
@@ -33,20 +29,24 @@ void panic_error(const char * filename, int line)
     } while (0)
 
 
+/* Default error message for unexpected errors. */
+#define ERROR_MESSAGE   \
+    "Unexpected error at %s:%d", __FILE__, __LINE__
+
 /* Tests system calls: -1 => error. */
-#define _COND_IO(expr)       ((int) (expr) != -1)
+#define _COND_IO(expr)                  ((int) (expr) != -1)
 #define TEST_IO_(expr, message...)      TEST_(_COND_IO, expr, message)
 #define TEST_IO(expr)                   TEST_IO_(expr, ERROR_MESSAGE)
 #define ASSERT_IO(expr)                 ASSERT_(_COND_IO, expr)
 
 /* Tests pointers: NULL => error. */
-#define _COND_NULL(expr)     ((expr) != NULL)
+#define _COND_NULL(expr)                ((expr) != NULL)
 #define TEST_NULL_(expr, message...)    TEST_(_COND_NULL, expr, message)
 #define TEST_NULL(expr)                 TEST_NULL_(expr, ERROR_MESSAGE)
 #define ASSERT_NULL(expr)               ASSERT_(_COND_NULL, expr)
 
 /* Tests an ordinary boolean: false => error. */
-#define _COND_OK(expr)       ((bool) (expr))
+#define _COND_OK(expr)                  ((bool) (expr))
 #define TEST_OK_(expr, message...)      TEST_(_COND_OK, expr, message)
 #define TEST_OK(expr)                   TEST_OK_(expr, ERROR_MESSAGE)
 #define ASSERT_OK(expr)                 ASSERT_(_COND_OK, expr)
@@ -67,7 +67,12 @@ void panic_error(const char * filename, int line)
 
 
 /* These two macros facilitate using the macros above by creating if
- * expressions that're slightly more sensible looking than ?: in context. */
+ * expressions that are slightly more sensible looking than ?: in context. */
 #define DO_(action)                     ({action; true;})
 #define IF_(test, iftrue)               ((test) ? (iftrue) : true)
 #define IF_ELSE(test, iftrue, iffalse)  ((test) ? (iftrue) : (iffalse))
+
+
+/* A couple of tricksy compile time bug checking macros from the kernel. */
+#define BUILD_BUG_ON(condition)         ((void) BUILD_BUG_OR_ZERO(condition))
+#define BUILD_BUG_OR_ZERO(e)            (sizeof(struct { int:-!!(e); }))
