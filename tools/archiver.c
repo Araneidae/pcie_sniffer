@@ -1,3 +1,6 @@
+/* Archiver program for capturing data from FA sniffer and writing to disk.
+ * Also makes the continuous data stream available over a dedicated socket. */
+
 #include <stdbool.h>
 #include <stdio.h>
 
