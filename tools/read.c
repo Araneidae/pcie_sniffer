@@ -28,19 +28,21 @@
 
 
 
-static filter_mask_t filter_mask;
 
-static char * file_name;
 static int file_fd;
+static int file_out = STDOUT_FILENO;
 
 static struct disk_header header;
 static struct disk_header *header_mmap;
 
 
+
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 /* Argument processing.                                                      */
 
-static int file_out = STDOUT_FILENO;
+static char * archive_file_name;
+static char * out_file_name = NULL;
+static filter_mask_t filter_mask;
 static bool show_header = false;           // Header mode selected
 static int dump_length = 0;                // Number of frames to dump
 static int dump_end = 0;                   // End offset of frames
@@ -48,6 +50,7 @@ static bool show_progress = true;          // Show progress bar
 static bool pace_progress = true;          // Pace progress to avoid gapping
 static char * argv0;
 static bool absolute_offset = false;
+static int backoff_threshold = 20000;
 
 
 static void usage(void)
@@ -69,6 +72,7 @@ static void usage(void)
 "   -o: Specify output file (otherwise written to stdout)\n"
 "   -q  Don't show progress while reading frames\n"
 "   -n  Don't pace reading: can result in gaps in archive\n"
+"   -b: Specify backoff threshold (default is 20000 frames)\n"
 "\n"
 "The end frame offset is normally a negative offset from the most recently\n"
 "written frame, with default 0, so the most recent frames are normally\n"
@@ -96,20 +100,16 @@ static bool parse_opts(int *argc, char ***argv)
     bool ok = true;
     while (ok)
     {
-        switch (getopt(*argc, *argv, "+hHm:o:aqn"))
+        switch (getopt(*argc, *argv, "+hHm:o:aqnb:"))
         {
             case 'h':   usage();                                    exit(0);
             case 'H':   show_header = true;                         break;
             case 'm':   ok = parse_mask(optarg, filter_mask);       break;
-            case 'o':
-                ok = TEST_IO_(
-                    file_out = open(
-                        optarg, O_WRONLY | O_CREAT | O_TRUNC, 0666),
-                    "Unable to open output file \"%s\"", optarg);
-                break;
+            case 'o':   out_file_name = optarg;                     break;
             case 'a':   absolute_offset = true;                     break;
             case 'q':   show_progress = false;                      break;
             case 'n':   pace_progress = false;                      break;
+            case 'b':   ok = parse_int(optarg, &backoff_threshold); break;
 
             case '?':
             default:
@@ -142,7 +142,7 @@ static bool parse_args(int argc, char **argv)
         dump_end = 0;
         return
             PROCESS_ARG("Filename",
-                DO_(file_name = *argv))  &&
+                DO_(archive_file_name = *argv))  &&
             IF_(!show_header,
                 PROCESS_ARG("Frame count",
                     parse_int(*argv, &dump_length))  &&
@@ -224,13 +224,13 @@ static void pace_reading(int64_t dump_offset, uint64_t *now)
 
         /* Convert the backlog into seconds (rounding down) and sleep for that
          * long if necessary. */
-        int backlog = (header.h.write_backlog / FA_FRAME_SIZE) / 10000;
-        if (backlog > 0)
+        int backlog_frames = header.h.write_backlog / FA_FRAME_SIZE;
+        if (backlog_frames > backoff_threshold)
         {
             if (show_progress)
-                fprintf(stderr, "Backlog %d, pausing for %ds\r",
-                    header.h.write_backlog / FA_FRAME_SIZE, backlog);
-            sleep(backlog);
+                fprintf(stderr, "Backlog %d, pausing for 1 second\r",
+                    backlog_frames);
+            sleep(1);
         }
     }
 }
@@ -302,9 +302,14 @@ int main(int argc, char **argv)
     {
         bool ok =
             TEST_IO_(
-                file_fd = open(file_name, O_RDONLY),
-                "Unable to open file \"%s\"", file_name)  &&
-            prepare_header();
+                file_fd = open(archive_file_name, O_RDONLY),
+                "Unable to open file \"%s\"", archive_file_name)  &&
+            prepare_header()  &&
+            IF_(out_file_name != NULL,
+                TEST_IO_(
+                    file_out = open(
+                        out_file_name, O_WRONLY | O_CREAT | O_TRUNC, 0666),
+                    "Unable to open output file \"%s\"", out_file_name));
 
         if (ok)
         {
