@@ -35,13 +35,19 @@ static void * sniffer_thread(void *context)
         {
             void *buffer = get_write_block();
             if (buffer == NULL)
+            {
+                printf("sniffer unable to write block\n");
                 break;
+            }
             bool gap =
                 read(fa_sniffer, buffer, fa_block_size) <
                     (ssize_t) fa_block_size;
             release_write_block(gap);
             if (gap)
+            {
+                printf("unable to read block\n");
                 break;
+            }
         }
         
         close(fa_sniffer);

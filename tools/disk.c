@@ -25,6 +25,9 @@ void initialise_header(struct disk_header *header, uint64_t data_size)
     header->h.data_size = data_size;
     header->h.block_count = 0;
     header->h.max_block_count = MAX_HEADER_BLOCKS;
+    header->h.write_backlog = 0;
+    header->h.disk_status = 0;
+    header->h.write_buffer = 0;
 }
 
 
@@ -82,20 +85,39 @@ bool validate_header(struct disk_header *header, off64_t file_size)
 }
 
 
+static const char * status_strings[] = {
+    "Inactive",
+    "Writing",
+    "No data available"
+};
+
 void print_header(FILE *out, struct disk_header *header)
 {
+    int64_t data_size = header->h.data_size / FA_FRAME_SIZE;
+    const char * status =
+        header->h.disk_status < ARRAY_SIZE(status_strings) ?
+        status_strings[header->h.disk_status] : "Unknown";
     fprintf(out,
-        "FA sniffer archive: %.7s, v%d.  Data size = %llu, offset %llu\n"
+        "FA sniffer archive: %.7s, v%d.\n"
+        "Data size = %llu frames (%llu bytes), offset %llu bytes\n"
+        "Status: %s, write backlog: %d (%.2f%%), buffer %d bytes\n"
         "Blocks: %d of %d\n",
         header->h.signature, header->h.version,
-        header->h.data_size, header->h.data_start,
+        data_size, header->h.data_size,
+        header->h.data_start,
+        status, header->h.write_backlog / FA_FRAME_SIZE,
+        100.0 * header->h.write_backlog / header->h.write_buffer,
+        header->h.write_buffer,
         header->h.block_count, header->h.max_block_count);
     for (uint32_t i = 0; i < header->h.block_count; i ++)
     {
         struct block_record *block = &header->blocks[i];
-        fprintf(out, " %d: %lld-%lld (%lld-%lld)\n", i,
-            block->start_offset, block->stop_offset,
-            block->start_sec, block->stop_sec);
+        int64_t start = block->start_offset / FA_FRAME_SIZE;
+        int64_t stop  = block->stop_offset  / FA_FRAME_SIZE;
+        int64_t length = stop - start;
+        if (length <= 0)
+            length += data_size;
+        fprintf(out, "%3d: %lld-%lld (%lld frames)\n", i, start, stop, length);
     }
 }
 
@@ -106,40 +128,6 @@ bool get_filesize(int disk_fd, uint64_t *file_size)
     return
         TEST_IO(fstat(disk_fd, &stat))  &&
         DO_(*file_size = stat.st_size);
-}
-
-
-bool read_header(int disk_fd, struct disk_header *header)
-{
-    struct flock flock = {
-        .l_type = F_RDLCK, .l_whence = SEEK_SET,
-        .l_start = 0, .l_len = sizeof(*header)
-    };
-
-    return
-        TEST_IO(fcntl(disk_fd, F_SETLKW, &flock))  &&
-        TEST_IO(lseek(disk_fd, 0, SEEK_SET))  &&
-        
-        TEST_OK(read(disk_fd, header, sizeof(*header)) == sizeof(*header))  &&
-        DO_(flock.l_type = F_UNLCK)  &&
-        TEST_IO(fcntl(disk_fd, F_SETLK, &flock));
-}
-
-
-bool write_header(int disk_fd, struct disk_header *header)
-{
-    struct flock flock = {
-        .l_type = F_WRLCK, .l_whence = SEEK_SET,
-        .l_start = 0, .l_len = sizeof(*header)
-    };
-
-    return
-        TEST_IO(fcntl(disk_fd, F_SETLKW, &flock))  &&
-        TEST_IO(lseek(disk_fd, 0, SEEK_SET))  &&
-        
-        TEST_OK(write(disk_fd, header, sizeof(*header)) == sizeof(*header))  &&
-        DO_(flock.l_type = F_UNLCK)  &&
-        TEST_IO(fcntl(disk_fd, F_SETLK, &flock));
 }
 
 

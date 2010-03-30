@@ -1,5 +1,15 @@
 /* Filter mask routines. */
 
+/* The filter mask is used to specify a list of PVs.  The syntax of a filter
+ * mask can be written as:
+ *
+ *      mask = id [ "-" id ] [ "," mask]
+ *
+ * Here each id identifies a particular BPM and must be a number in the range
+ * 0 to 255 and id1-id2 identifies an inclusive range of BPMs.
+ */
+
+
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -48,6 +58,7 @@ static bool read_id(char *original, char **string, int *id)
         TEST_OK_(0 <= *id  &&  *id < 256, "id %d out of range", *id);
 }
 
+
 bool parse_mask(char *string, filter_mask_t mask)
 {
     char *original = string;    // Just for error reporting
@@ -64,8 +75,9 @@ bool parse_mask(char *string, filter_mask_t mask)
             {
                 string ++;
                 int end;
-                ok = read_id(original, &string, &end);
-                for (int i = id; i <= end  &&  ok; i ++)
+                ok = read_id(original, &string, &end)  &&
+                    TEST_OK_(id <= end, "Range %d-%d is empty", id, end);
+                for (int i = id; ok  &&  i <= end; i ++)
                     set_mask_bit(mask, i);
             }
             else

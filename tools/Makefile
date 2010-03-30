@@ -30,9 +30,10 @@ prepare_SRCS += error.c
 prepare_SRCS += disk.c
 
 
+all: $(BUILD)
+
 define expand_build
 $(target): $($(target)_SRCS:.c=.o)
-all: $(target)
 endef
 $(foreach target,$(BUILD),$(eval $(expand_build)))
 

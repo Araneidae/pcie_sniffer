@@ -24,7 +24,6 @@
 /* Prepares central memory buffer. */
 bool initialise_buffer(size_t block_size, size_t block_count);
 
-
 /* Reserves the next slot in the buffer for writing. An entire contiguous
  * block of block_size bytes is returned, or NULL if the disk writer has
  * underrun and hasn't caught up yet -- in this case the writer needs to back
@@ -44,14 +43,17 @@ void close_reader(struct reader_state *reader);
  * returns pointer to data to be read.  If there is a gap in the available
  * data then NULL is returned, and release_write_block() should not be called
  * before calling get_read_block() again. */
-void * get_read_block(struct reader_state *reader);
+void * get_read_block(struct reader_state *reader, int *backlog);
 /* Releases the write block.  If false is returned then the block was
  * overwritten while locked due to reader underrun; however, if the reader was
  * opened with reserved_reader set this is guaranteed not to happen.  Only
  * call if non-NULL value returned by get_read_block(). */
 bool release_read_block(struct reader_state *reader);
+/* Permanently halts the reader, interruping any waits in release_read_block()
+ * and forcing further calls to get_read_block() to return NULL. */
+void stop_reader(struct reader_state *reader);
 
 
-/* The block size used by the buffer is a global variable initialised by
- * initialise_buffer and left constant thereafter. */
+/* The block size (in bytes) used by the buffer is a global variable
+ * initialised by initialise_buffer and left constant thereafter. */
 extern size_t fa_block_size;

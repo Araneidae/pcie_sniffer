@@ -20,18 +20,33 @@
 #define PROGRESS_INTERVAL   (1 << 8)
 
 
-#define USAGE_STRING \
-    "Usage: prepare <file-name> <disk-size>\n" \
-    "\n" \
-    "Prepares disk file <file-name> for use as FA sniffer archive file by\n" \
-    "writing a suitable header block and filling <disk-size> bytes of\n" \
-    "data area with zeros."
+/*****************************************************************************/
+/*                               Option Parsing                              */
+/*****************************************************************************/
+
+static char *argv0;
+
+uint64_t data_size;
+char * file_name;
+bool header_only = false;
+
+
+void usage(void)
+{
+    printf(
+"Usage: %s [options] <file-name> <disk-size>\n"
+"\n"
+"Prepares disk file <file-name> for use as FA sniffer archive file by\n"
+"writing a suitable header block and filling <disk-size> bytes of\n"
+"data area with zeros.\n"
+        , argv0);
+}
 
 bool read_disk_size(const char *string, uint64_t *size)
 {
     char *end;
     *size = strtoll(string, &end, 0);
-    if (!TEST_OK_(end > string, "Disk size \"%s\" is not a number!", string))
+    if (!TEST_OK_(end > string, "Disk size \"%s\" is not a number", string))
         return false;
     switch (*end)
     {
@@ -41,6 +56,56 @@ bool read_disk_size(const char *string, uint64_t *size)
     }
     return TEST_OK_(*end == '\0', "Malformed disk size \"%s\"", string);
 }
+
+
+bool process_opts(int *argc, char ***argv)
+{
+    argv0 = (*argv)[0];
+    bool ok = true;
+    while (ok)
+    {
+        switch (getopt(*argc, *argv, "+hH"))
+        {
+            case 'h':   usage();                                    exit(0);
+            case 'H':   header_only = true;                         break;
+            case '?':
+            default:
+                fprintf(stderr, "Try `%s -h` for usage\n", argv0);
+                return false;
+            case -1:
+                *argc -= optind;
+                *argv += optind;
+                return true;
+        }
+    }
+    return false;
+}
+
+
+bool process_args(int argc, char **argv)
+{
+#define PROCESS_ARG(missing, action) \
+    ( TEST_OK_(argc >= 1, missing " argument missing")  && \
+      action  && \
+      DO_(argc -= 1; argv += 1) )
+    
+    return
+        PROCESS_ARG("Filename",
+            DO_(file_name = *argv))  &&
+        IF_(!header_only,
+            PROCESS_ARG("File size",
+                read_disk_size(*argv, &data_size)  &&
+                TEST_OK_(data_size % DATA_LOCK_BLOCK_SIZE == 0,
+                    "Data size %llu must be multiple of %d",
+                    data_size, DATA_LOCK_BLOCK_SIZE)))  &&
+        TEST_OK_(argc == 0, "Too many arguments");
+#undef PROCESS_ARG
+}
+
+
+/*****************************************************************************/
+/*                                                                           */
+/*****************************************************************************/
 
 
 bool write_new_header(int file_fd, uint64_t data_size)
@@ -85,12 +150,11 @@ bool fill_zeros(int file_fd, uint64_t size)
     for (uint64_t n = 0; ok  &&  size >= ZEROS_BLOCK_SIZE;
          size -= ZEROS_BLOCK_SIZE, n += 1)
     {
-        ok = TEST_OK(
-            write(file_fd, zeros, ZEROS_BLOCK_SIZE) == ZEROS_BLOCK_SIZE);
+        ok = TEST_write(file_fd, zeros, ZEROS_BLOCK_SIZE);
         show_progress(n, final_n);
     }
     if (ok && size > 0)
-        ok = TEST_OK(write(file_fd, zeros, size) == (ssize_t) size);
+        ok = TEST_write(file_fd, zeros, size);
     printf("\n");
     return ok;
 }
@@ -98,24 +162,24 @@ bool fill_zeros(int file_fd, uint64_t size)
 
 int main(int argc, char **argv)
 {
-    uint64_t data_size;
     bool ok =
-        TEST_OK_(argc == 3, USAGE_STRING)  &&
-        read_disk_size(argv[2], &data_size)  &&
-        TEST_OK_(data_size % DATA_LOCK_BLOCK_SIZE == 0,
-            "Data size %llu must be multiple of %d",
-            data_size, DATA_LOCK_BLOCK_SIZE);
+        process_opts(&argc, &argv)  &&
+        process_args(argc, argv);
     if (!ok)
         /* For argument errors return 1. */
         return 1;
 
-    const char *file_name = argv[1];
     int file_fd;
+    uint64_t file_size;
+    int open_flags = header_only ? 0 : O_CREAT | O_TRUNC;
     ok =
         TEST_IO(file_fd = open(file_name,
-            O_WRONLY | O_DIRECT | O_CREAT | O_TRUNC, 0664))  &&
+            O_WRONLY | O_DIRECT | open_flags, 0664))  &&
+        IF_(header_only, 
+            get_filesize(file_fd, &file_size)  &&
+            DO_(data_size = file_size - DISK_HEADER_SIZE))  &&
         write_new_header(file_fd, data_size)  &&
-        fill_zeros(file_fd, data_size)  &&
+        IF_(!header_only, fill_zeros(file_fd, data_size))  &&
         TEST_IO(close(file_fd));
     
     return ok ? 0 : 2;

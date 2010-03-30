@@ -78,6 +78,8 @@ struct reader_state
 {
     size_t index_out;               // Next block to read
     bool underflowed;               // Set if buffer overrun for this reader
+    bool running;                   // Used to halt reader
+    int backlog;                    // Gap between read and write pointer
     struct list_head list_entry;    // Links all active readers together
     struct list_head reserved_entry;    // and all reserved readers
 };
@@ -95,11 +97,28 @@ LIST_HEAD(reserved_readers);
         struct reader_state, reserved_entry, reader, &reserved_readers)
 
 
+/* Updates the backlog count.  This is computed as the maximum number of
+ * unread frames from the write pointer to our read pointer.  As we're only
+ * interested in the maximum value, this only needs to be updated when frames
+ * are written. */
+static void update_backlog(struct reader_state *reader)
+{
+    int backlog = buffer_index_in - reader->index_out;
+    if (backlog < 0)
+        backlog += block_count;
+    
+    if (backlog > reader->backlog)
+        reader->backlog = backlog;
+}
+
+
 struct reader_state * open_reader(bool reserved_reader)
 {
     struct reader_state *reader = malloc(sizeof(struct reader_state));
     reader->index_out = buffer_index_in;
     reader->underflowed = false;
+    reader->backlog = 0;
+    reader->running = true;
     INIT_LIST_HEAD(&reader->reserved_entry);
     
     LOCK();
@@ -123,7 +142,7 @@ void close_reader(struct reader_state *reader)
 }
 
 
-void * get_read_block(struct reader_state *reader)
+void * get_read_block(struct reader_state *reader, int *backlog)
 {
     void *buffer;
     LOCK();
@@ -142,9 +161,11 @@ void * get_read_block(struct reader_state *reader)
 
         /* If we're on the tail of the writer then we have to wait for a new
          * entry in the buffer. */
-        while (reader->index_out == buffer_index_in)
+        while (reader->running  &&  reader->index_out == buffer_index_in)
             wait(&in_signal);
-        if (gap_buffer[reader->index_out])
+        if (!reader->running)
+            buffer = NULL;
+        else if (gap_buffer[reader->index_out])
         {
             /* Nothing to actually read at this point, just return gap
              * indicator instead. */
@@ -154,8 +175,23 @@ void * get_read_block(struct reader_state *reader)
         else
             buffer = get_buffer(reader->index_out);
     }
+    
+    if (backlog)
+    {
+        *backlog = reader->backlog * fa_block_size;
+        reader->backlog = 0;
+    }
     UNLOCK();
     return buffer;
+}
+
+
+void stop_reader(struct reader_state *reader)
+{
+    LOCK();
+    reader->running = false;
+    signal(&in_signal);
+    UNLOCK();
 }
 
 
@@ -220,6 +256,8 @@ void release_write_block(bool gap)
             /* Whoops.  We've collided with a reader.  Mark the reader as
              * underflowed. */
             reader->underflowed = true;
+        else
+            update_backlog(reader);
     }
     signal(&in_signal);
     UNLOCK();

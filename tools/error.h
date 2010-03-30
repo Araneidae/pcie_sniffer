@@ -72,7 +72,41 @@ void panic_error(const char * filename, int line)
 #define IF_(test, iftrue)               ((test) ? (iftrue) : true)
 #define IF_ELSE(test, iftrue, iffalse)  ((test) ? (iftrue) : (iffalse))
 
+/* Used to ensure that the finally action always occurs, even if action fails.
+ * Returns combined success of both actions. */
+#define FINALLY(action, finally) \
+    ( { \
+        bool __ok__ = (action); \
+        (finally)  &&  __ok__; \
+    } )
+
+#define UNLESS(action, on_fail) \
+    ( { \
+        bool __ok__ = (action); \
+        if (!__ok__) { on_fail; } \
+        __ok__; \
+    } )
+    
+
+/* Testing read and write happens often enough to be annoying, so some
+ * special case macros here. */
+#define _COND_rw(rw, fd, buf, count) \
+    (rw(fd, buf, count) == (ssize_t) (count))
+#define TEST_read(fd, buf, count)   TEST_OK(_COND_rw(read, fd, buf, count))
+#define TEST_write(fd, buf, count)  TEST_OK(_COND_rw(write, fd, buf, count))
+#define TEST_read_(fd, buf, count, message...) \
+    TEST_OK_(_COND_rw(read, fd, buf, count), message)
+#define TEST_write_(fd, buf, count, message...) \
+    TEST_OK_(_COND_rw(write, fd, buf, count), message)
+#define ASSERT_read(fd, buf, count)  ASSERT_OK(_COND_rw(read, fd, buf, count))
+#define ASSERT_write(fd, buf, count) ASSERT_OK(_COND_rw(write, fd, buf, count))
+
 
 /* A couple of tricksy compile time bug checking macros from the kernel. */
 #define BUILD_BUG_ON(condition)         ((void) BUILD_BUG_OR_ZERO(condition))
 #define BUILD_BUG_OR_ZERO(e)            (sizeof(struct { int:-!!(e); }))
+
+/* A rather randomly placed helper routine.  This and its equivalents are
+ * defined all over the place, but there doesn't appear to be a definitive
+ * definition anywhere. */
+#define ARRAY_SIZE(a)   (sizeof(a)/sizeof((a)[0]))
