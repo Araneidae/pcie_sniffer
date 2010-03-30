@@ -1,9 +1,4 @@
 /kbuild
 /*.html
 *.o
-
-/tools/archive_server
-/tools/fa_archiver
-/tools/live_server
-/tools/test
-/tools/read
+/tools/build

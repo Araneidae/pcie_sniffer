@@ -1,3 +1,5 @@
+all:    # Default target comes first!
+
 CFLAGS += -std=gnu99
 CFLAGS += -O2 -Werror -Wall -Wextra
 CFLAGS += -Wno-unused-parameter
@@ -8,22 +10,32 @@ CPPFLAGS += -D_FILE_OFFSET_BITS=64
 
 LDFLAGS += -lpthread -lrt
 
-all: fa_archiver archive_server live_server
 
-clean:
-	rm -f fa_archiver archive_server live_server
-	rm -f *.o
+BUILD = archiver read prepare
 
-fa_archiver: fa_archiver.c error.c
+archiver_SRCS += archiver.c
+archiver_SRCS += error.c
+archiver_SRCS += buffer.c
+archiver_SRCS += sniffer.c
+archiver_SRCS += disk_writer.c
+archiver_SRCS += disk.c
 
-archive_server: archive_server.c error.c
+read_SRCS += read.c
+read_SRCS += error.c
+read_SRCS += mask.c
+read_SRCS += disk.c
 
-live_server: live_server.c error.c
+prepare_SRCS += prepare.c
+prepare_SRCS += error.c
+prepare_SRCS += disk.c
 
-error.o: error.h
 
+define expand_build
+$(target): $($(target)_SRCS:.c=.o)
+all: $(target)
+endef
+$(foreach target,$(BUILD),$(eval $(expand_build)))
 
-test: test.o error.o buffer.o sniffer.o disk_writer.o disk.o
-prepare: prepare.o error.o disk.o
-read: read.o error.o mask.o disk.o
-dd: dd.o disk.o error.o
+%.d: %.c
+	set -o pipefail && $(CC) -M $(CPPFLAGS) $< | sed '1s/:/ $@:/' >$@
+include $(patsubst %.c,%.d,$(foreach target,$(BUILD),$($(target)_SRCS)))
