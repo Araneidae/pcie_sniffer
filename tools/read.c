@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
 #include <unistd.h>
 #include <malloc.h>
@@ -51,6 +52,8 @@ static bool pace_progress = true;          // Pace progress to avoid gapping
 static char * argv0;
 static bool absolute_offset = false;
 static int backoff_threshold = 20000;
+static bool matlab_format = false;
+static bool matlab_double = false;
 
 
 static void usage(void)
@@ -68,11 +71,16 @@ static void usage(void)
 "\n"
 "Options:\n"
 "   -a  Specified end frame offset is absolute offset into archive\n"
-"   -m: Select BPM ids to be read from archive, default is to read all 256\n"
+"   -m: Select BPM ids to be read from archive, default is to read all 256.\n"
+"       The mask is a series of comma separated ids or ranges, where a range\n"
+"       is a pair of ids separated by -.  Eg, -m1-168,255 fetchs all BPMs\n"
+"       together with the timestamp field.\n"
 "   -o: Specify output file (otherwise written to stdout)\n"
 "   -q  Don't show progress while reading frames\n"
 "   -n  Don't pace reading: can result in gaps in archive\n"
 "   -b: Specify backoff threshold (default is 20000 frames)\n"
+"   -M  Write output as matlab file\n"
+"   -D  Write matlab output in double format, implies -M\n"
 "\n"
 "The end frame offset is normally a negative offset from the most recently\n"
 "written frame, with default 0, so the most recent frames are normally\n"
@@ -100,7 +108,7 @@ static bool parse_opts(int *argc, char ***argv)
     bool ok = true;
     while (ok)
     {
-        switch (getopt(*argc, *argv, "+hHm:o:aqnb:"))
+        switch (getopt(*argc, *argv, "+hHm:o:aqnb:MD"))
         {
             case 'h':   usage();                                    exit(0);
             case 'H':   show_header = true;                         break;
@@ -110,6 +118,8 @@ static bool parse_opts(int *argc, char ***argv)
             case 'q':   show_progress = false;                      break;
             case 'n':   pace_progress = false;                      break;
             case 'b':   ok = parse_int(optarg, &backoff_threshold); break;
+            case 'M':   matlab_format = true;                       break;
+            case 'D':   matlab_format = true; matlab_double = true; break;
 
             case '?':
             default:
@@ -154,6 +164,106 @@ static bool parse_args(int argc, char **argv)
 #undef PROCESS_ARG
 }
 
+
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+/* Matlab format support.                                                    */
+
+/* The matlab format symbol definitions we use. */
+#define miINT8          1
+#define miUINT8         2
+#define miINT32         5
+#define miUINT32        6
+#define miMATRIX        14
+
+#define mxDOUBLE_CLASS  6
+#define mxINT32_CLASS   12
+
+
+static void compute_mask_ids(uint8_t *array, filter_mask_t mask)
+{
+    for (int bit = 0; bit < 256; bit ++)
+        if (test_mask_bit(mask, bit))
+            *array++ = bit;
+}
+
+
+static void write_matlab_string(int32_t **hh, char *string)
+{
+    int32_t *h = *hh;
+    int l = strlen(string);
+    *h++ = miINT8;      *h++ = l;
+    memcpy(h, string, l);
+    *hh = h + 2 * ((l + 7) / 8);
+}
+
+
+/* Returns the number of bytes of padding required after data_length bytes of
+ * following data to ensure that the entire matrix is padded to 8 bytes. */
+static int write_matrix_header(
+    int32_t **hh, int class, char *name,
+    int data_type, int data_length,
+    int dimensions, ...)
+{
+    va_list dims;
+    va_start(dims, dimensions);
+
+    int32_t *h = *hh;
+    *h++ = miMATRIX;
+    int32_t *l = h++;   // total length will be written here.
+    // Matrix flags: consists of two uint32 words encoding the class.
+    *h++ = miUINT32;    *h++ = 8;
+    *h++ = class;
+    *h++ = 0;
+    
+    // Matrix dimensions: one int32 for each dimension
+    *h++ = miINT32;     *h++ = dimensions * sizeof(int32_t);
+    for (int i = 0; i < dimensions; i ++)
+        *h++ = va_arg(dims, int32_t);
+    h += dimensions & 1;    // Padding if required
+    
+    // Element name
+    write_matlab_string(&h, name);
+    
+    // Data header: data follows directly after.
+    int padding = (8 - data_length) & 7;
+    *h++ = data_type;   *h++ = data_length;
+    *l = data_length + (h - l - 1) * sizeof(int32_t) + padding;
+    
+    *hh = h;
+    return padding;
+}
+
+
+static void write_matlab_header(void)
+{
+    char header[4096];
+    memset(header, 0, sizeof(header));
+
+    /* The first 128 bytes are the description and format marks. */
+    memset(header, ' ', 124);
+    sprintf(header, "MATLAB 5.0 MAT-file generated from FA sniffer data");
+    header[strlen(header)] = ' ';
+    *(uint16_t *)&header[124] = 0x0100;   // Version flag
+    *(uint16_t *)&header[126] = 0x4d49;   // 'IM' endian mark
+    int32_t *h = (int32_t *)&header[128];
+
+    int mask_length = count_mask_bits(filter_mask);
+    
+    /* Write out the index array tying data back to original BPM ids. */
+    int padding = write_matrix_header(&h,
+        mxDOUBLE_CLASS, "ids", miUINT8, mask_length, 2, 1, mask_length);
+    compute_mask_ids((uint8_t *)h, filter_mask);
+    h = (int32_t *)((char *)h + mask_length + padding);
+
+    /* Finally write out the matrix header for the fa data. */
+    write_matrix_header(&h,
+        matlab_double ? mxDOUBLE_CLASS : mxINT32_CLASS,
+        "fa", miINT32, dump_length * mask_length * 8,
+        3, 2, mask_length, dump_length);
+    
+    ASSERT_write(file_out, header, (char *) h - header);
+}
 
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -320,7 +430,11 @@ int main(int argc, char **argv)
                 print_header(out, &header);
             }
             else
+            {
+                if (matlab_format)
+                    write_matlab_header();
                 dump_data();
+            }
         }
         
         return ok ? 0 : 2;
