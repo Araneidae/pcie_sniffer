@@ -91,7 +91,7 @@ bool process_args(int argc, char **argv)
     ( TEST_OK_(argc >= 1, missing " argument missing")  && \
       action  && \
       DO_(argc -= 1; argv += 1) )
-    
+
     return
         PROCESS_ARG("Filename",
             DO_(file_name = *argv))  &&
@@ -195,6 +195,6 @@ int main(int argc, char **argv)
         write_new_header(file_fd, data_size)  &&
         IF_(!header_only, fill_zeros(file_fd, data_size))  &&
         TEST_IO(close(file_fd));
-    
+
     return ok ? 0 : 2;
 }

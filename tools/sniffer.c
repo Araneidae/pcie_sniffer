@@ -49,7 +49,7 @@ static void * sniffer_thread(void *context)
                 break;
             }
         }
-        
+
         close(fa_sniffer);
 
         /* Pause before retrying.  Ideally should poll sniffer card for

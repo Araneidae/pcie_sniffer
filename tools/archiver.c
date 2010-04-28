@@ -15,7 +15,7 @@
 
 
 #define K               1024
-#define FA_BLOCK_SIZE   (64 * K)    // Block size for device read 
+#define FA_BLOCK_SIZE   (64 * K)    // Block size for device read
 
 
 

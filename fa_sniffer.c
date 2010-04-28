@@ -1,9 +1,9 @@
 /* Kernel driver for Communication Controller FA sniffer.
- * 
+ *
  * Copyright (C) 2010  Michael Abbott, Diamond Light Source Ltd.
  *
  * The FA sniffer card captures a stream of Fast Acquisition frames from the
- * FA network and writes them to memory using PCIe DMA transfer.  
+ * FA network and writes them to memory using PCIe DMA transfer.
  * A new frame arrives every 100 microseconds, and the sniffer has no control
  * over this data stream.
  *
@@ -153,7 +153,7 @@ static int initialise_fa_hw(struct pci_dev *pdev, struct fa_sniffer_hw **hw)
     writel(0, &regs->ccfaicfgval);
     readl(&regs->dcsr);             // Force sequencing of writes!
     writel(8, &regs->ccfaicfgval);
-    
+
     return rc;
 
 no_bar:
@@ -335,7 +335,7 @@ struct fa_sniffer_open {
      * interrupted when the current buffer is switched. */
     int isr_block_index;        // Block currently being read into by DMA
     struct completion isr_done; // Completion of all interrupts
-    
+
     /* Reader status. */
     bool stopped;               // Set by ISR, read by reader
     int read_block_index;       // Index of next block in buffers[] to read
@@ -367,23 +367,23 @@ static irqreturn_t fa_sniffer_isr(
         /* Normal DMA complete interrupt, data in hand is ready: set up the
          * next transfer and let the read know that there's data to read. */
         struct fa_block *filled_block = & open->buffers[filled_ix];
-        pci_dma_sync_single_for_cpu(pdev, 
+        pci_dma_sync_single_for_cpu(pdev,
             filled_block->dma, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
         smp_wmb();  // Guards DMA transfer for block we've just read
         filled_block->state = fa_block_data;
     }
-    
+
     if ((status & FA_STATUS_STOPPED) == 0) {
         /* DMA transfer still in progress.  Set up a new DMA buffer. */
         int fresh_ix = step_index(filled_ix, 2);
         struct fa_block *fresh_block = & open->buffers[fresh_ix];
-        
+
         if (fresh_block->state == fa_block_free) {
             smp_rmb();  // Guards copy_to_user for free block.
             /* Alas on our target system (2.6.18) this function seems to do
              * nothing whatsoever.  Hopefully we'll have a working
              * implementation one day... */
-            pci_dma_sync_single_for_device(pdev, 
+            pci_dma_sync_single_for_device(pdev,
                 fresh_block->dma, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
             set_dma_buffer(hw, fresh_block->dma);
             fresh_block->state = fa_block_dma;
@@ -459,13 +459,13 @@ static int fa_sniffer_open(struct inode *inode, struct file *file)
     open->buffers[1].state = fa_block_dma;
 
     prepare_dma(fa_sniffer->hw, FA_BLOCK_FRAMES);
-    
+
     /* Set up the interrupt routine and start things off. */
     rc = request_irq(
         pdev->irq, fa_sniffer_isr,
         IRQF_SHARED, "fa_sniffer", open);
     TEST_RC(rc, no_irq, "Unable to request irq");
-    
+
     /* Prepare the initial hardware DMA buffers. */
     set_dma_buffer(fa_sniffer->hw, open->buffers[0].dma);
     start_fa_hw(fa_sniffer->hw);
@@ -474,7 +474,7 @@ static int fa_sniffer_open(struct inode *inode, struct file *file)
     return 0;
 
 no_irq:
-   
+
     /* Release circular buffer resources.  Rather tricky interaction with
      * allocation loop above so that we release precisely those resources we
      * allocated, in reverse order. */
@@ -695,7 +695,7 @@ static int __devinit fa_sniffer_probe(
     unsigned int minor;
     int rc = get_free_minor(&minor);
     TEST_RC(rc, no_minor, "Unable to allocate minor device number");
-    
+
     rc = fa_sniffer_enable(pdev);
     if (rc < 0)     goto no_sniffer;
 
@@ -771,7 +771,7 @@ static void __devexit fa_sniffer_remove(struct pci_dev *pdev)
     kfree(fa_sniffer);
     fa_sniffer_disable(pdev);
     release_minor(minor);
-    
+
     printk(KERN_INFO "fa_sniffer%d removed\n", minor);
 }
 
@@ -802,7 +802,7 @@ static int __init fa_sniffer_init(void)
     TEST_RC(rc, no_chrdev, "Unable to allocate device");
     fa_sniffer_major = MAJOR(dev);
     fa_sniffer_minors = 0;
-    
+
     rc = pci_register_driver(&fa_sniffer_driver);
     TEST_RC(rc, no_driver, "Unable to register driver");
     printk(KERN_INFO "Installed FA sniffer module\n");

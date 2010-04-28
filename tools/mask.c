@@ -63,7 +63,7 @@ bool parse_mask(char *string, filter_mask_t mask)
 {
     char *original = string;    // Just for error reporting
     memset(mask, 0, sizeof(filter_mask_t));
-    
+
     bool ok = true;
     while (ok)
     {
@@ -83,7 +83,7 @@ bool parse_mask(char *string, filter_mask_t mask)
             else
                 set_mask_bit(mask, id);
         }
-        
+
         if (*string != ',')
             break;
         string ++;

@@ -15,7 +15,7 @@ void print_error(const char * Message, ...)
     char ErrorMessage[MESSAGE_LENGTH];
     va_list args;
     va_start(args, Message);
-    
+
     int Count = vsnprintf(ErrorMessage, MESSAGE_LENGTH, Message, args);
     if (Error != 0)
     {

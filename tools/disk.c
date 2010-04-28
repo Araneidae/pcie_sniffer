@@ -52,7 +52,7 @@ bool validate_header(struct disk_header *header, off64_t file_size)
             "Unexpected header block count: %u", header->h.max_block_count)  &&
         TEST_OK_(header->h.block_count <= header->h.max_block_count,
             "Too many blocks: %u", header->h.block_count);
-    
+
     /* Validate the blocks: there should be no overlap in offsets.  We don't
      * check the timestamps, as these are advisory only. */
     off64_t data_stop = header->blocks[0].stop_offset;

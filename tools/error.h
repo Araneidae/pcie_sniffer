@@ -86,7 +86,7 @@ void panic_error(const char * filename, int line)
         if (!__ok__) { on_fail; } \
         __ok__; \
     } )
-    
+
 
 /* Testing read and write happens often enough to be annoying, so some
  * special case macros here. */

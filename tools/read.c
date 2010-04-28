@@ -25,7 +25,7 @@
     "Options:\n" \
     "   -m: Select BPM ids to be read from archive\n" \
     "   -H  Show header information\n" \
-    "   -h  Shows this help text\n" 
+    "   -h  Shows this help text\n"
 
 
 
@@ -215,21 +215,21 @@ static int write_matrix_header(
     *h++ = miUINT32;    *h++ = 8;
     *h++ = class;
     *h++ = 0;
-    
+
     // Matrix dimensions: one int32 for each dimension
     *h++ = miINT32;     *h++ = dimensions * sizeof(int32_t);
     for (int i = 0; i < dimensions; i ++)
         *h++ = va_arg(dims, int32_t);
     h += dimensions & 1;    // Padding if required
-    
+
     // Element name
     write_matlab_string(&h, name);
-    
+
     // Data header: data follows directly after.
     int padding = (8 - data_length) & 7;
     *h++ = data_type;   *h++ = data_length;
     *l = data_length + (h - l - 1) * sizeof(int32_t) + padding;
-    
+
     *hh = h;
     return padding;
 }
@@ -249,7 +249,7 @@ static void write_matlab_header(void)
     int32_t *h = (int32_t *)&header[128];
 
     int mask_length = count_mask_bits(filter_mask);
-    
+
     /* Write out the index array tying data back to original BPM ids. */
     int padding = write_matrix_header(&h,
         mxDOUBLE_CLASS, "ids", miUINT8, mask_length, 2, 1, mask_length);
@@ -261,7 +261,7 @@ static void write_matlab_header(void)
         matlab_double ? mxDOUBLE_CLASS : mxINT32_CLASS,
         "fa", miINT32, dump_length * mask_length * 8,
         3, 2, mask_length, dump_length);
-    
+
     ASSERT_write(file_out, header, (char *) h - header);
 }
 
@@ -377,7 +377,7 @@ static void dump_data(void)
             dump_offset -= data_length;
             seek_data(dump_offset);
         }
-        
+
         if (pace_progress)
             pace_reading(dump_offset, &now);
         if (show_progress)
@@ -407,7 +407,7 @@ static bool prepare_header(void)
 int main(int argc, char **argv)
 {
     memset(filter_mask, 0xff, sizeof(filter_mask_t));
-    
+
     if (parse_opts(&argc, &argv)  &&  parse_args(argc, argv))
     {
         bool ok =
@@ -436,7 +436,7 @@ int main(int argc, char **argv)
                 dump_data();
             }
         }
-        
+
         return ok ? 0 : 2;
     }
     else

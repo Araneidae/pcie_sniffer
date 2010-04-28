@@ -26,7 +26,7 @@ bool start_server(int *sock)
     strcpy(sun.sun_path, SOCKET_PATH);
     int len = sizeof(sun.sun_family) + strlen(sun.sun_path) + 1;
     unlink(sun.sun_path);   // In case the socket already exists...
-    
+
     return
         TEST_IO(*sock = socket(AF_UNIX, SOCK_STREAM, 0))  &&
         TEST_IO(bind(*sock, (struct sockaddr *) &sun, len))  &&

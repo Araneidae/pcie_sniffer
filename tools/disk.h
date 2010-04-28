@@ -37,8 +37,8 @@ struct disk_header {
         uint32_t write_buffer;
         uint32_t disk_status;
     } h;
-    char __padding[DISK_HEADER_SIZE 
-        - MAX_HEADER_BLOCKS * sizeof(struct block_record) 
+    char __padding[DISK_HEADER_SIZE
+        - MAX_HEADER_BLOCKS * sizeof(struct block_record)
         - sizeof(struct disk_fields)];
     struct block_record blocks[MAX_HEADER_BLOCKS];
 } __attribute__((__packed__));

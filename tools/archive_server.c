@@ -22,7 +22,7 @@ bool start_server(int port, int *sock)
         .sin_addr.s_addr = INADDR_ANY,
         .sin_port = htons(port)
     };
-    
+
     return
         TEST_IO(*sock = socket(AF_INET, SOCK_STREAM, 0))  &&
         TEST_IO(bind(*sock, (struct sockaddr *) &sin, sizeof(sin)))  &&

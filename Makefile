@@ -17,7 +17,7 @@ NOTES.html: NOTES
 
 clean:
 	rm -rf kbuild NOTES.html
-	make -C tools clean 
+	make -C tools clean
 
 .PHONY: tools clean all
 

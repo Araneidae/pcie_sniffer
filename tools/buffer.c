@@ -106,7 +106,7 @@ static void update_backlog(struct reader_state *reader)
     int backlog = buffer_index_in - reader->index_out;
     if (backlog < 0)
         backlog += block_count;
-    
+
     if (backlog > reader->backlog)
         reader->backlog = backlog;
 }
@@ -120,13 +120,13 @@ struct reader_state * open_reader(bool reserved_reader)
     reader->backlog = 0;
     reader->running = true;
     INIT_LIST_HEAD(&reader->reserved_entry);
-    
+
     LOCK();
     list_add_tail(&reader->list_entry, &all_readers);
     if (reserved_reader)
         list_add_tail(&reader->reserved_entry, &reserved_readers);
     UNLOCK();
-    
+
     return reader;
 }
 
@@ -137,7 +137,7 @@ void close_reader(struct reader_state *reader)
     list_del(&reader->list_entry);
     list_del(&reader->reserved_entry);
     UNLOCK();
-    
+
     free(reader);
 }
 
@@ -175,7 +175,7 @@ void * get_read_block(struct reader_state *reader, int *backlog)
         else
             buffer = get_buffer(reader->index_out);
     }
-    
+
     if (backlog)
     {
         *backlog = reader->backlog * fa_block_size;
@@ -244,7 +244,7 @@ void release_write_block(bool gap)
         /* Ignore repeated reports of the same gap. */
         return;
     in_gap = gap;
-    
+
     LOCK();
     gap_buffer[buffer_index_in] = gap;
     advance_index(&buffer_index_in);

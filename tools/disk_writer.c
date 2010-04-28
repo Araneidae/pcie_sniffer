@@ -66,7 +66,7 @@ static void expire_archive_blocks(void)
     while (header.h.block_count > 1  &&
            expired(header.blocks[header.h.block_count - 1].stop_offset))
         header.h.block_count -= 1;
-    
+
     /* If the start of the oldest block has expired then bring it forward. */
     off64_t *old_start =
         &header.blocks[header.h.block_count - 1].start_offset;
@@ -122,7 +122,7 @@ static void write_header(void)
     ASSERT_IO(fcntl(disk_fd, F_SETLKW, &flock));
     memcpy(header_mmap, &header, DISK_HEADER_SIZE);
     ASSERT_IO(msync(header_mmap, DISK_HEADER_SIZE, MS_ASYNC));
-        
+
     flock.l_type = F_UNLCK;
     ASSERT_IO(fcntl(disk_fd, F_SETLK, &flock));
 }
@@ -162,7 +162,7 @@ static void * get_valid_read_block(struct reader_state *reader, bool archiving)
     {
         /* No data to read.  If we are archiving at this point we'll insert a
          * break in the data record and then start a new archive block. */
-        
+
         if (archiving)
             /* The next read may take some time, ensure the header is up to
              * date while we're waiting. */
@@ -188,12 +188,12 @@ static void * writer_thread(void *context)
     void *block = get_valid_read_block(reader, false);
     start_archive_block();
     ASSERT_IO(lseek(disk_fd, data_start + write_offset, SEEK_SET));
-    
+
     while (writer_running)
     {
         ASSERT_write(disk_fd, block, fa_block_size);
         release_read_block(reader);
-        
+
         write_offset += fa_block_size;
         if (write_offset >= data_size)
         {
@@ -205,7 +205,7 @@ static void * writer_thread(void *context)
         /* Go and get the next block to be written. */
         block = get_valid_read_block(reader, true);
     }
-    
+
     return NULL;
 }
 
@@ -250,7 +250,7 @@ bool initialise_disk_writer(const char *disk, int write_buffer)
 {
     reader = open_reader(true);
     writer_running = true;
-    
+
     return
         TEST_IO_(
             disk_fd = open(disk, O_RDWR | O_DIRECT | O_LARGEFILE),
@@ -267,6 +267,6 @@ void terminate_disk_writer(void)
     ASSERT_0(pthread_join(writer_id, NULL));
     close_reader(reader);
     close_header();
-    
+
     printf("done\n");
 }
