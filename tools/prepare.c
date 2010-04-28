@@ -39,6 +39,9 @@ void usage(void)
 "Prepares disk file <file-name> for use as FA sniffer archive file by\n"
 "writing a suitable header block and filling <disk-size> bytes of\n"
 "data area with zeros.\n"
+"\n"
+"Options:\n"
+"   -H  Only initialise the header, take existing file size.\n"
         , argv0);
 }
 
@@ -160,6 +163,20 @@ bool fill_zeros(int file_fd, uint64_t size)
 }
 
 
+/* Computes a data size compatible with the given file size. */
+
+bool compute_data_size(int file_fd, uint64_t *data_size)
+{
+    uint64_t file_size;
+    return
+        get_filesize(file_fd, &file_size)  &&
+        DO_(*data_size =
+            (file_size - DISK_HEADER_SIZE) & ~(DATA_LOCK_BLOCK_SIZE - 1))  &&
+        TEST_OK_(file_size > DISK_HEADER_SIZE  &&  *data_size > 0,
+            "File size %llu too small", file_size);
+}
+
+
 int main(int argc, char **argv)
 {
     bool ok =
@@ -170,14 +187,11 @@ int main(int argc, char **argv)
         return 1;
 
     int file_fd;
-    uint64_t file_size;
     int open_flags = header_only ? 0 : O_CREAT | O_TRUNC;
     ok =
         TEST_IO(file_fd = open(file_name,
             O_WRONLY | O_DIRECT | open_flags, 0664))  &&
-        IF_(header_only, 
-            get_filesize(file_fd, &file_size)  &&
-            DO_(data_size = file_size - DISK_HEADER_SIZE))  &&
+        IF_(header_only, compute_data_size(file_fd, &data_size))  &&
         write_new_header(file_fd, data_size)  &&
         IF_(!header_only, fill_zeros(file_fd, data_size))  &&
         TEST_IO(close(file_fd));

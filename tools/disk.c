@@ -10,6 +10,8 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <sys/ioctl.h>
+#include <linux/fs.h>
 
 #include "error.h"
 
@@ -42,7 +44,7 @@ bool validate_header(struct disk_header *header, off64_t file_size)
             "Invalid header version %u", header->h.version)  &&
         TEST_OK_(data_start == DISK_HEADER_SIZE,
             "Unexpected data start: %llu", data_start)  &&
-        TEST_OK_(data_size + data_start == file_size,
+        TEST_OK_(data_size + data_start <= file_size,
             "Invalid data size %llu in header", data_size)  &&
         TEST_OK_(data_size % DATA_LOCK_BLOCK_SIZE == 0,
             "Uneven size data area")  &&
@@ -124,10 +126,19 @@ void print_header(FILE *out, struct disk_header *header)
 
 bool get_filesize(int disk_fd, uint64_t *file_size)
 {
-    struct stat stat;
-    return
-        TEST_IO(fstat(disk_fd, &stat))  &&
-        DO_(*file_size = stat.st_size);
+    /* First try blocksize, if that fails try stat: the first works on a
+     * block device, the second on a regular file. */
+    if (ioctl(disk_fd, BLKGETSIZE64, file_size) == 0)
+        return true;
+    else
+    {
+        struct stat stat;
+        return
+            TEST_IO(fstat(disk_fd, &stat))  &&
+            DO_(*file_size = stat.st_size)  &&
+            TEST_OK_(*file_size > 0,
+                "Zero file size.  Maybe stat failed?");
+    }
 }
 
 
