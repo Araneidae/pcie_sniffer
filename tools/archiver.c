@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <semaphore.h>
+#include <signal.h>
 
 #include "error.h"
 #include "buffer.h"
@@ -24,8 +26,8 @@
 static char *argv0;
 static char *fa_sniffer_device = "/dev/fa_sniffer0";
 static char *output_file = NULL;
-/* A plausible default buffer size is 2K blocks, or 128MB. */
-static unsigned int buffer_size = 2 * K * FA_BLOCK_SIZE;
+/* A good default buffer size is 8K blocks, or 256MB. */
+static unsigned int buffer_size = 8 * K * FA_BLOCK_SIZE;
 
 static bool verbose = false;
 
@@ -99,6 +101,38 @@ bool process_args(int argc, char **argv)
 /*****************************************************************************/
 
 
+static sem_t shutdown_semaphore;
+
+
+static void at_exit(int signal)
+{
+    printf("at_exit called\n");
+    close(STDIN_FILENO);
+    ASSERT_IO(sem_post(&shutdown_semaphore));
+}
+
+static bool initialise_signals(void)
+{
+    struct sigaction action;
+    action.sa_handler = at_exit;
+    action.sa_flags = 0;
+    return
+        TEST_IO(sem_init(&shutdown_semaphore, 0, 0))  &&
+        TEST_IO(sigfillset(&action.sa_mask))  &&
+        TEST_IO(sigaction(SIGHUP,  &action, NULL))  &&
+        TEST_IO(sigaction(SIGINT,  &action, NULL))  &&
+        TEST_IO(sigaction(SIGQUIT, &action, NULL))  &&
+        TEST_IO(sigaction(SIGTERM, &action, NULL));
+}
+
+
+void process_command(char *line)
+{
+    printf("Reading command: \"%s\"\n", line);
+    at_exit(0);
+}
+
+
 int main(int argc, char **argv)
 {
     bool ok =
@@ -106,15 +140,18 @@ int main(int argc, char **argv)
         process_args(argc, argv)  &&
         initialise_buffer(FA_BLOCK_SIZE, buffer_size / FA_BLOCK_SIZE)  &&
         initialise_sniffer(fa_sniffer_device)  &&
-        initialise_disk_writer(output_file, buffer_size);
+        initialise_disk_writer(output_file, buffer_size)  &&
+        initialise_signals();
 
     if (ok)
     {
         printf("running\n");
         char line[80];
-        printf("> ");
-        fflush(stdout);
-        fgets(line, sizeof(line), stdin);
+        while (
+                printf("> "),
+                fflush(stdout),
+                fgets(line, sizeof(line), stdin))
+            process_command(line);
 
         terminate_sniffer();
         terminate_disk_writer();
