@@ -175,11 +175,10 @@ static void set_dma_buffer(struct fa_sniffer_hw *hw, dma_addr_t buffer)
     /* Get Maximum TLP size and compute how many TLPs are required for one
      * frame of 2048 bytes */
     u32 bTrafficClass = 0;  // Default Memory Write TLP Traffic Class
-#if defined(CONFIG_X86_64) || defined(CONFIG_HIGHMEM64G)
     u32 fEnable64bit = 1;   // Enable 64b Memory Write TLP Generation
+#if defined(CONFIG_X86_64) || defined(CONFIG_HIGHMEM64G)
     u32 top_address = (u32) (buffer >> 32);
 #else
-    u32 fEnable64bit = 0;
     u32 top_address = 0;
 #endif
 
