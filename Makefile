@@ -3,6 +3,8 @@ KBUILD = kbuild-$(shell uname -r)
 
 all: $(KBUILD)/fa_sniffer.ko tools NOTES.html
 
+module: $(KBUILD)/fa_sniffer.ko
+
 $(KBUILD):
 	mkdir -p $(KBUILD)
 	$(foreach file,$(KFILES), ln -s ../$(file) $(KBUILD);)

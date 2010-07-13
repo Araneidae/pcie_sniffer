@@ -18,13 +18,14 @@
 #include <linux/pci.h>
 #include <linux/uaccess.h>
 #include <linux/interrupt.h>
+#include <linux/sched.h>
 
 
 
 MODULE_AUTHOR("Michael Abbott, Diamond Light Source Ltd.");
 MODULE_DESCRIPTION("Driver for PCIe Fast Acquisition Sniffer");
 MODULE_LICENSE("GPL");
-MODULE_VERSION("0.1-dev");
+MODULE_VERSION("1.0");
 
 
 
@@ -359,7 +360,11 @@ static inline int step_index(int ix, int step)
 
 
 static irqreturn_t fa_sniffer_isr(
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,19)
+    int irq, void * dev_id)
+#else
     int irq, void * dev_id, struct pt_regs *pt_regs)
+#endif
 {
     struct fa_sniffer_open *open = dev_id;
     struct fa_sniffer_hw *hw = open->fa_sniffer->hw;
@@ -455,7 +460,11 @@ static int fa_sniffer_open(struct inode *inode, struct file *file)
         /* Map each block for DMA. */
         block->dma = pci_map_single(
             pdev, block->block, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
-        TEST_(pci_dma_mapping_error(block->dma),
+        TEST_(pci_dma_mapping_error(
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,27)
+                    pdev,
+#endif
+                    block->dma),
             rc = -EIO, no_dma_map, "Unable to map DMA block");
         block->state = fa_block_free;
     }
@@ -467,8 +476,7 @@ static int fa_sniffer_open(struct inode *inode, struct file *file)
 
     /* Set up the interrupt routine and start things off. */
     rc = request_irq(
-        pdev->irq, fa_sniffer_isr,
-        IRQF_SHARED, "fa_sniffer", open);
+        pdev->irq, fa_sniffer_isr, IRQF_SHARED, "fa_sniffer", open);
     TEST_RC(rc, no_irq, "Unable to request irq");
 
     /* Prepare the initial hardware DMA buffers. */
