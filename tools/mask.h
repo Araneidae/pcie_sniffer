@@ -4,12 +4,12 @@
 typedef uint32_t filter_mask_t[256/32];
 
 
-extern inline void set_mask_bit(filter_mask_t mask, int bit)
+static inline void set_mask_bit(filter_mask_t mask, int bit)
 {
     mask[bit >> 5] |= 1 << (bit & 0x1f);
 }
 
-extern inline bool test_mask_bit(filter_mask_t mask, int bit)
+static inline bool test_mask_bit(filter_mask_t mask, int bit)
 {
     return !!(mask[bit >> 5] & (1 << (bit & 0x1f)));
 }
