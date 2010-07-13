@@ -27,7 +27,7 @@ bool start_server(int port, int *sock)
         TEST_IO(*sock = socket(AF_INET, SOCK_STREAM, 0))  &&
         TEST_IO(bind(*sock, (struct sockaddr *) &sin, sizeof(sin)))  &&
         TEST_IO(listen(*sock, 5))  &&
-        DO_(printf("Server listening on port %d\n", port));
+        DO_(log_message("Server listening on port %d", port));
 }
 
 
@@ -37,9 +37,9 @@ void process_connection(int scon)
     ssize_t rx;
     if (TEST_IO(rx = read(scon, buf, sizeof(buf)))  &&  rx > 0)
     {
-        printf("Read: \"%.*s\"\n", rx, buf);
+        log_message("Read: \"%.*s\"", rx, buf);
     }
-    printf("Some input read\n");
+    log_message("Some input read");
     sprintf(buf, "HTTP/1.0 200 OK\r\n\r\n<HTML><BODY>Ok!</BODY></HTML>\r\n");
     TEST_IO(write(scon, buf, strlen(buf)));
 }

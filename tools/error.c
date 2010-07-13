@@ -1,23 +1,76 @@
+#include <stdbool.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <string.h>
 #include <errno.h>
 #include <stdarg.h>
+#include <syslog.h>
 
 #include "error.h"
 
-void print_error(const char * Message, ...)
+
+/* Fixed on-stack buffers for message logging. */
+#define MESSAGE_LENGTH  512
+
+
+/* Determines whether error messages go to stderr or syslog. */
+static bool daemon_mode = false;
+/* Determines whether to log non-error messages. */
+static bool verbose = false;
+
+
+void verbose_logging(bool verbose_)
+{
+    verbose = verbose_;
+}
+
+void start_logging(const char *ident)
+{
+    openlog(ident, 0, LOG_DAEMON);
+    daemon_mode = true;
+}
+
+
+void vlog_message(int priority, const char *format, va_list args)
+{
+    char message[MESSAGE_LENGTH];
+    vsnprintf(message, sizeof(message), format, args);
+    if (daemon_mode)
+        syslog(priority, "%s", message);
+    else
+        fprintf(stderr, "%s\n", message);
+}
+
+void log_message(const char * message, ...)
+{
+    if (verbose)
+    {
+        va_list args;
+        va_start(args, message);
+        vlog_message(LOG_INFO, message, args);
+    }
+}
+
+void log_error(const char * message, ...)
+{
+    va_list args;
+    va_start(args, message);
+    vlog_message(LOG_ERR, message, args);
+}
+
+
+
+void print_error(const char * message, ...)
 {
     /* Large enough not to really worry about overflow.  If we do generate a
      * silly message that's too big, then that's just too bad. */
-    const int MESSAGE_LENGTH = 512;
-    int Error = errno;
-    char ErrorMessage[MESSAGE_LENGTH];
+    int error = errno;
+    char error_message[MESSAGE_LENGTH];
     va_list args;
-    va_start(args, Message);
+    va_start(args, message);
 
-    int Count = vsnprintf(ErrorMessage, MESSAGE_LENGTH, Message, args);
-    if (Error != 0)
+    int Count = vsnprintf(error_message, MESSAGE_LENGTH, message, args);
+    if (error != 0)
     {
         /* This is very annoying: strerror() is not not necessarily thread
          * safe ... but not for any compelling reason, see:
@@ -31,11 +84,11 @@ void print_error(const char * Message, ...)
          *
          * Ah well.  We go with the GNU definition, so here is a buffer to
          * maybe use for the message. */
-        char StrError[256];
-        snprintf(ErrorMessage + Count, MESSAGE_LENGTH - Count,
-            ": (%d) %s", Error, strerror_r(Error, StrError, sizeof(StrError)));
+        char StrError[MESSAGE_LENGTH];
+        snprintf(error_message + Count, MESSAGE_LENGTH - Count,
+            ": (%d) %s", error, strerror_r(error, StrError, sizeof(StrError)));
     }
-    fprintf(stderr, "%s\n", ErrorMessage);
+    log_error("%s\n", error_message);
 }
 
 

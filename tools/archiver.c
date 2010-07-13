@@ -106,7 +106,7 @@ static sem_t shutdown_semaphore;
 
 static void at_exit(int signal)
 {
-    printf("at_exit called\n");
+    log_message("at_exit called\n");
     close(STDIN_FILENO);
     ASSERT_IO(sem_post(&shutdown_semaphore));
 }
@@ -145,7 +145,7 @@ int main(int argc, char **argv)
 
     if (ok)
     {
-        printf("running\n");
+        log_message("Started");
         char line[80];
         while (
                 printf("> "),
@@ -153,8 +153,9 @@ int main(int argc, char **argv)
                 fgets(line, sizeof(line), stdin))
             process_command(line);
 
+        log_message("Shutting down");
         terminate_sniffer();
         terminate_disk_writer();
-        printf("done\n");
+        log_message("Shut Down");
     }
 }

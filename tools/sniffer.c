@@ -36,7 +36,7 @@ static void * sniffer_thread(void *context)
             void *buffer = get_write_block();
             if (buffer == NULL)
             {
-                printf("sniffer unable to write block\n");
+                log_message("sniffer unable to write block");
                 break;
             }
             bool gap =
@@ -45,7 +45,7 @@ static void * sniffer_thread(void *context)
             release_write_block(gap);
             if (gap)
             {
-                printf("unable to read block\n");
+                log_message("unable to read block");
                 break;
             }
         }
@@ -68,8 +68,8 @@ bool initialise_sniffer(const char * device_name)
 
 void terminate_sniffer(void)
 {
-    printf("Waiting for sniffer...\n");
+    log_message("Waiting for sniffer...");
     pthread_cancel(sniffer_id);     // Ignore complaint if already halted
     ASSERT_0(pthread_join(sniffer_id, NULL));
-    printf("done\n");
+    log_message("done");
 }

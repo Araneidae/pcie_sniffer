@@ -2,9 +2,24 @@
 
 #define unlikely(x)   __builtin_expect((x), 0)
 
+/* Controls whether to emit log_message() output. */
+void verbose_logging(bool verbose);
+
+/* Before this is called all messages are sent to stderr, afterwards all are
+ * sent to syslog with the given identification mark.*/
+void start_logging(const char *ident);
+
+/* Routines to write informative message or error to stderr or syslog. */
+void log_message(const char * message, ...)
+    __attribute__((format(printf, 1, 2)));
+void log_error(const char * message, ...)
+    __attribute__((format(printf, 1, 2)));
+void vlog_message(int priority, const char *format, va_list args);
+
+
+/* Internal routines called by error handling macros below. */
 void print_error(const char * message, ...)
     __attribute__((format(printf, 1, 2)));
-
 void panic_error(const char * filename, int line)
     __attribute__((__noreturn__));
 
