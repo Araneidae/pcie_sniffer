@@ -364,8 +364,6 @@ class Viewer:
         self.ui = ui
 
         # make any contents fill the empty frame
-        grid = QtGui.QGridLayout(ui.axes)
-        ui.axes.setLayout(grid)
         self.makeplot()
 
         self.monitor = monitor(self.on_data_update, self.on_eof, 500000, 1000)
@@ -422,8 +420,7 @@ class Viewer:
         '''set up plotting'''
         # Draw a plot in the frame.  We do this, rather than defining the
         # QwtPlot object in Qt designer because loadUi then fails!
-        p = Qwt5.QwtPlot(self.ui.axes)
-        self.ui.axes.layout().addWidget(p)
+        p = self.ui.plot
 
         self.p = p
         self.cx = self.makecurve(QtCore.Qt.blue)
@@ -527,11 +524,19 @@ class Viewer:
 
 cothread.iqt()
 
-# create and show form
-ui_viewer = uic.loadUi(os.path.join(os.path.dirname(__file__), 'viewer.ui'))
-ui_viewer.show()
-# Bind code to form
-s = Viewer(ui_viewer)
+# Create and show form
+# Would use loadUi, but unfortunately it doesn't work when one of the widgets is
+# a QwtPlot widget, so we end up with this rather complicated approach.
+ui_form, ui_base = uic.loadUiType(
+    os.path.join(os.path.dirname(__file__), 'viewer.ui'))
+
+class UI(ui_form, ui_base):
+    pass
+
+ui = UI()
+ui.setupUi(ui)
+s = Viewer(ui)
+ui.show()
 
 
 cothread.WaitForQuit()
