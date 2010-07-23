@@ -49,7 +49,7 @@ void panic_error(const char * filename, int line)
     "Unexpected error at %s:%d", __FILE__, __LINE__
 
 /* Tests system calls: -1 => error. */
-#define _COND_IO(expr)                  ((int) (expr) != -1)
+#define _COND_IO(expr)                  ((intptr_t) (expr) != -1)
 #define TEST_IO_(expr, message...)      TEST_(_COND_IO, expr, message)
 #define TEST_IO(expr)                   TEST_IO_(expr, ERROR_MESSAGE)
 #define ASSERT_IO(expr)                 ASSERT_(_COND_IO, expr)

@@ -57,7 +57,8 @@ static bool read_id(const char *original, const char **string, int *id)
     *id = strtol(*string, &next, 0);
     return
         TEST_OK_(next > *string,
-            "Number missing at \"%s\" (+%d)", original, *string - original)  &&
+            "Number missing at \"%s\" (+%d)",
+            original, (int) (*string - original))  &&
         DO_(*string = next)  &&
         TEST_OK_(0 <= *id  &&  *id < FA_ENTRY_COUNT, "id %d out of range", *id);
 }
@@ -97,7 +98,7 @@ bool parse_mask(const char *string, filter_mask_t mask)
         ok  &&
         TEST_OK_(*string == '\0',
             "Unexpected characters at \"%s\" (+%d)",
-            original, string - original);
+            original, (int) (string - original));
 }
 
 

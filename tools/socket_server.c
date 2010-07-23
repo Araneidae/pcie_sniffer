@@ -117,13 +117,13 @@ struct command_table {
 
 static void * process_connection(void *context)
 {
-    int scon = (int) context;
+    int scon = (intptr_t) context;
     char buf[4096];
     ssize_t rx;
     memset(buf, 0, sizeof(buf));
     if (TEST_IO(rx = read(scon, buf, sizeof(buf)))  &&  rx > 0)
     {
-        log_message("Read: \"%.*s\"", rx, buf);
+        log_message("Read: \"%.*s\"", (int)rx, buf);
         /* Command successfully read, dispatch it to the appropriate handler. */
         struct command_table * command = command_table;
         while (command->id  &&  command->id != buf[0])
@@ -137,11 +137,12 @@ static void * process_connection(void *context)
 
 static void * run_server(void *context)
 {
-    int sock = (int) context;
+    int sock = (int)(intptr_t) context;
     int scon;
     pthread_t thread;
     while (TEST_IO(scon = accept(sock, NULL, NULL)))
-        TEST_0(pthread_create(&thread, NULL, process_connection, (void *)scon));
+        TEST_0(pthread_create(&thread, NULL, 
+            process_connection, (void *)(intptr_t) scon));
     return NULL;
 }
 
@@ -161,7 +162,7 @@ bool initialise_server(int port)
         TEST_IO(bind(sock, (struct sockaddr *) &sin, sizeof(sin)))  &&
         TEST_IO(listen(sock, 5))  &&
         TEST_0(pthread_create(
-            &server_thread, NULL, run_server, (void *)sock))  &&
+            &server_thread, NULL, run_server, (void *)(intptr_t) sock))  &&
         DO_(log_message("Server listening on port %d", port));
 }
 

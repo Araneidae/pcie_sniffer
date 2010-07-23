@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -49,9 +50,9 @@ bool validate_header(struct disk_header *header, off64_t file_size)
         TEST_OK_(header->h.version == 1,
             "Invalid header version %u", header->h.version)  &&
         TEST_OK_(data_start == DISK_HEADER_SIZE,
-            "Unexpected data start: %llu", data_start)  &&
+            "Unexpected data start: %"PRIu64, data_start)  &&
         TEST_OK_(data_size + data_start <= file_size,
-            "Data size %llu in header larger than file", data_size)  &&
+            "Data size %"PRIu64" in header larger than file", data_size)  &&
         TEST_OK_(data_size % block_size == 0,
             "Uneven size data area")  &&
         TEST_OK_(header->h.max_segment_count == MAX_HEADER_SEGMENTS,
@@ -126,7 +127,8 @@ void print_header(FILE *out, struct disk_header *header)
         status_strings[header->h.disk_status] : "Unknown";
     fprintf(out,
         "FA sniffer archive: %.7s, v%d.\n"
-        "Data size = %llu frames (%llu bytes), offset %llu bytes\n"
+        "Data size = %"PRIu64" frames (%"PRIu64" bytes), "
+        "offset %"PRIu64" bytes\n"
         "Block size = %u bytes\n"
         "Status: %s, write backlog: %d (%.2f%%), buffer %d bytes\n"
         "Segments: %d of %d\n",
@@ -146,7 +148,7 @@ void print_header(FILE *out, struct disk_header *header)
         int64_t length = stop - start;
         if (length <= 0)
             length += data_size;
-        fprintf(out, "%3d: %lld-%lld (%lld frames, duration ",
+        fprintf(out, "%3d: %"PRId64"-%"PRId64" (%"PRId64" frames, duration ",
             i, start, stop, length);
         print_duration(out, length);
         fprintf(out, ")\n");
@@ -178,7 +180,7 @@ void dump_binary(FILE *out, void *buffer, size_t length)
 
     for (size_t a = 0; a < length; a += 16)
     {
-        printf("%08x: ", a);
+        printf("%08zx: ", a);
         for (int i = 0; i < 16; i ++)
         {
             if (a + i < length)

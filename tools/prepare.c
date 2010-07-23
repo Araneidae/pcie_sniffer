@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -48,7 +49,7 @@ static void usage(void)
 "   -s:  Specify size of file.  The file will be resized to the given size\n"
 "        and filled with zeros.\n"
 "   -b:  Specify block size for IO transfers to disk.  This should match\n"
-"        the disk's IO block size.  The default value is %lld.\n"
+"        the disk's IO block size.  The default value is %"PRIu64".\n"
 "\n"
 "Both block size and file size can be followed by one of K, M, G or T to\n"
 "specify sizes in kilo, mega, giga or terabytes.\n"
@@ -146,7 +147,7 @@ static void show_progress(uint64_t n, uint64_t final_n)
     const char *progress = "|/-\\";
     if (n % PROGRESS_INTERVAL == 0)
     {
-        printf("%c %9llu (%5.2f%%)\r",
+        printf("%c %9"PRIu64" (%5.2f%%)\r",
             progress[(n / PROGRESS_INTERVAL) % 4], n,
             100.0 * (double) n / final_n);
         fflush(stdout);
@@ -182,7 +183,7 @@ static bool compute_data_size(int file_fd, uint64_t *data_size)
     *data_size = block_count * block_size;
     return
         TEST_OK_(file_size > DISK_HEADER_SIZE  &&  *data_size > 0,
-            "File size %llu too small", file_size);
+            "File size %"PRIu64" too small", file_size);
 }
 
 
