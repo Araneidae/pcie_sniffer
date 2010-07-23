@@ -239,6 +239,7 @@ static bool process_header(int write_buffer)
     return ok;
 }
 
+
 static void close_header(void)
 {
     header.h.disk_status = 0;
@@ -246,18 +247,25 @@ static void close_header(void)
 }
 
 
-bool initialise_disk_writer(const char *disk, int write_buffer)
+bool initialise_disk_writer(
+    const char *file_name, int write_buffer, struct disk_header **header_)
+{
+    return
+        TEST_IO_(
+            disk_fd = open(file_name, O_RDWR | O_DIRECT | O_LARGEFILE),
+            "Unable to open archive file \"%s\"", file_name)  &&
+        process_header(write_buffer)  &&
+        DO_(*header_ = &header);
+}
+
+
+bool start_disk_writer(void)
 {
     reader = open_reader(true);
     writer_running = true;
-
-    return
-        TEST_IO_(
-            disk_fd = open(disk, O_RDWR | O_DIRECT | O_LARGEFILE),
-            "Unable to open archive file \"%s\"", disk)  &&
-        process_header(write_buffer)  &&
-        TEST_0(pthread_create(&writer_id, NULL, writer_thread, NULL));
+    return TEST_0(pthread_create(&writer_id, NULL, writer_thread, NULL));
 }
+
 
 void terminate_disk_writer(void)
 {

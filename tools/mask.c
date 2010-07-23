@@ -14,18 +14,22 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <string.h>
 
 #include "error.h"
+#include "sniffer.h"
 
 #include "mask.h"
 
+
+#define WRITE_BUFFER_SIZE       (1 << 16)
 
 
 int count_mask_bits(filter_mask_t mask)
 {
     int count = 0;
-    for (int bit = 0; bit < 256; bit ++)
+    for (int bit = 0; bit < FA_ENTRY_COUNT; bit ++)
         if (test_mask_bit(mask, bit))
             count ++;
     return count;
@@ -47,7 +51,7 @@ void print_mask(FILE *out, filter_mask_t mask)
 
 
 
-static bool read_id(char *original, char **string, int *id)
+static bool read_id(const char *original, const char **string, int *id)
 {
     char *next;
     *id = strtol(*string, &next, 0);
@@ -55,13 +59,13 @@ static bool read_id(char *original, char **string, int *id)
         TEST_OK_(next > *string,
             "Number missing at \"%s\" (+%d)", original, *string - original)  &&
         DO_(*string = next)  &&
-        TEST_OK_(0 <= *id  &&  *id < 256, "id %d out of range", *id);
+        TEST_OK_(0 <= *id  &&  *id < FA_ENTRY_COUNT, "id %d out of range", *id);
 }
 
 
-bool parse_mask(char *string, filter_mask_t mask)
+bool parse_mask(const char *string, filter_mask_t mask)
 {
-    char *original = string;    // Just for error reporting
+    const char *original = string;    // Just for error reporting
     memset(mask, 0, sizeof(filter_mask_t));
 
     bool ok = true;
@@ -117,4 +121,33 @@ int copy_frame(void *to, void *from, filter_mask_t mask)
         }
     }
     return copied;
+}
+
+
+bool write_frames(int file, filter_mask_t mask, void *frame, int count)
+{
+    int out_frame_size = count_mask_bits(mask) * FA_ENTRY_SIZE;
+    while (count > 0)
+    {
+        char buffer[WRITE_BUFFER_SIZE];
+        size_t buffered = 0;
+        while (count > 0  &&  buffered + out_frame_size <= WRITE_BUFFER_SIZE)
+        {
+            copy_frame(buffer + buffered, frame, mask);
+            frame = (char *) frame + FA_FRAME_SIZE;
+            buffered += out_frame_size;
+            count -= 1;
+        }
+
+        size_t written = 0;
+        while (buffered > 0)
+        {
+            size_t wr;
+            if (!TEST_IO(wr = write(file, buffer + written, buffered)))
+                return false;
+            written += wr;
+            buffered -= wr;
+        }
+    }
+    return true;
 }

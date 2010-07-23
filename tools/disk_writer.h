@@ -1,3 +1,11 @@
+/* Interface to archive to disk writer. */
 
-bool initialise_disk_writer(const char *disk, int write_buffer);
+/* First stage of disk writer initialisation: opens the archive file and loads
+ * the header into memory.  Can be called before initialising buffers. */
+bool initialise_disk_writer(
+    const char *file_name, int write_buffer, struct disk_header **header);
+/* Starts writing files to disk.  Must be called after initialising the buffer
+ * layer. */
+bool start_disk_writer(void);
+/* Orderly shutdown of the disk writer. */
 void terminate_disk_writer(void);

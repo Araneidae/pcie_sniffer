@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <unistd.h>
 #include <semaphore.h>
 #include <signal.h>
@@ -16,16 +17,14 @@
 #include "error.h"
 #include "buffer.h"
 #include "sniffer.h"
+#include "disk.h"
 #include "disk_writer.h"
 #include "socket_server.h"
 #include "archiver.h"
 
 
 #define K               1024
-/* An experiment shows that a disk block transfer size of 512K is optimal in the
- * sense of being the largest single block transfer size. */
-#define FA_BLOCK_SIZE   (512 * K)    // Block size for device read
-/* A good default buffer size is 256MB. */
+/* A good default memory buffer size is 256MB. */
 #define BUFFER_SIZE     (256 * K * K)
 
 
@@ -146,16 +145,21 @@ static void at_exit(int signum)
 
 static bool initialise_signals(void)
 {
-    struct sigaction action;
-    action.sa_handler = at_exit;
-    action.sa_flags = 0;
+    struct sigaction do_shutdown = { .sa_handler = at_exit, .sa_flags = 0 };
+    struct sigaction do_ignore   = { .sa_handler = SIG_IGN, .sa_flags = 0 };
     return
         TEST_IO(sem_init(&shutdown_semaphore, 0, 0))  &&
-        TEST_IO(sigfillset(&action.sa_mask))  &&
-        TEST_IO(sigaction(SIGHUP,  &action, NULL))  &&
-        TEST_IO(sigaction(SIGINT,  &action, NULL))  &&
-        TEST_IO(sigaction(SIGQUIT, &action, NULL))  &&
-        TEST_IO(sigaction(SIGTERM, &action, NULL));
+
+        TEST_IO(sigfillset(&do_shutdown.sa_mask))  &&
+        TEST_IO(sigfillset(&do_ignore.sa_mask))  &&
+        /* Catch the usual interruption signals and use them to trigger an
+         * orderly shutdown. */
+        TEST_IO(sigaction(SIGHUP,  &do_shutdown, NULL))  &&
+        TEST_IO(sigaction(SIGINT,  &do_shutdown, NULL))  &&
+        TEST_IO(sigaction(SIGQUIT, &do_shutdown, NULL))  &&
+        TEST_IO(sigaction(SIGTERM, &do_shutdown, NULL))  &&
+        /* When acting as a server we need to ignore SIGPIPE, of course. */
+        TEST_IO(sigaction(SIGPIPE, &do_ignore, NULL));
 }
 
 
@@ -185,15 +189,18 @@ static bool maybe_daemonise(void)
 
 int main(int argc, char **argv)
 {
+    struct disk_header *header;
     bool ok =
         process_args(argc, argv)  &&
         initialise_signals()  &&
+        initialise_disk_writer(output_filename, buffer_size, &header)  &&
         maybe_daemonise()  &&
         /* All the thread initialisation must be done after daemonising, as of
          * course threads don't survive across the daemon() call!  Alas, this
          * means that many startup errors go into syslog rather than stderr. */
-        initialise_buffer(FA_BLOCK_SIZE, buffer_size / FA_BLOCK_SIZE)  &&
-        initialise_disk_writer(output_filename, buffer_size)  &&
+        initialise_buffer(
+            header->h.block_size, buffer_size / header->h.block_size)  &&
+        start_disk_writer()  &&
         initialise_sniffer(fa_sniffer_device)  &&
         initialise_server(server_socket);
 

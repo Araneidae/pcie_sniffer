@@ -12,19 +12,23 @@
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <linux/fs.h>
+#include <errno.h>
 
 #include "error.h"
+#include "sniffer.h"
 
 #include "disk.h"
 
 
-void initialise_header(struct disk_header *header, uint64_t data_size)
+void initialise_header(
+    struct disk_header *header, uint32_t block_size, uint64_t data_size)
 {
     memset(header, 0, sizeof(*header));
     strncpy(header->h.signature, DISK_SIGNATURE, sizeof(header->h.signature));
     header->h.version = DISK_VERSION;
     header->h.data_start = DISK_HEADER_SIZE;
     header->h.data_size = data_size;
+    header->h.block_size = block_size;
     header->h.segment_count = 0;
     header->h.max_segment_count = MAX_HEADER_SEGMENTS;
     header->h.write_backlog = 0;
@@ -37,6 +41,8 @@ bool validate_header(struct disk_header *header, off64_t file_size)
 {
     off64_t data_start = header->h.data_start;
     off64_t data_size = header->h.data_size;
+    uint32_t block_size = header->h.block_size;
+    errno = 0;      // Suppresses invalid error report from TEST_OK_ failures
     bool ok =
         TEST_OK_(strncmp(header->h.signature, DISK_SIGNATURE,
             sizeof(header->h.signature)) == 0, "Invalid header signature")  &&
@@ -45,8 +51,8 @@ bool validate_header(struct disk_header *header, off64_t file_size)
         TEST_OK_(data_start == DISK_HEADER_SIZE,
             "Unexpected data start: %llu", data_start)  &&
         TEST_OK_(data_size + data_start <= file_size,
-            "Invalid data size %llu in header", data_size)  &&
-        TEST_OK_(data_size % DATA_LOCK_BLOCK_SIZE == 0,
+            "Data size %llu in header larger than file", data_size)  &&
+        TEST_OK_(data_size % block_size == 0,
             "Uneven size data area")  &&
         TEST_OK_(header->h.max_segment_count == MAX_HEADER_SEGMENTS,
             "Unexpected header block count: %u",
@@ -68,7 +74,11 @@ bool validate_header(struct disk_header *header, off64_t file_size)
             TEST_OK_(stop == last_start,
                 "Block %d doesn't follow previous block", i)  &&
             TEST_OK_(start < data_size, "Block %d starts outside file", i)  &&
-            TEST_OK_(stop < data_size, "Block %d stop outside file", i);
+            TEST_OK_(stop < data_size, "Block %d stop outside file", i)  &&
+            TEST_OK_(start % block_size == 0,
+                "Block %d starts on uneven boundary", i)  &&
+            TEST_OK_(stop % block_size == 0,
+                "Block %d ends on uneven boundary", i);
         last_start = start;
 
         /* Check when data wraps around end of buffer.  This can only happen
@@ -88,6 +98,20 @@ bool validate_header(struct disk_header *header, off64_t file_size)
 }
 
 
+/* Prints a duration in frames as a length in hours, minutes and seconds,
+ * assuming 10072 frames per second. */
+static void print_duration(FILE *out, int64_t length)
+{
+    lldiv_t secs = lldiv(length, 10072);
+    lldiv_t mins = lldiv(secs.quot, 60);
+    lldiv_t hrs  = lldiv(mins.quot, 60);
+    if (hrs.quot > 0)
+        fprintf(out, "%lldh ", hrs.quot);
+    if (mins.quot > 0)
+        fprintf(out, "%lldm ", hrs.rem);
+    fprintf(out, "%lld.%03llds", mins.rem, (1000 * secs.rem) / 10072);
+}
+
 static const char * status_strings[] = {
     "Inactive",
     "Writing",
@@ -103,11 +127,13 @@ void print_header(FILE *out, struct disk_header *header)
     fprintf(out,
         "FA sniffer archive: %.7s, v%d.\n"
         "Data size = %llu frames (%llu bytes), offset %llu bytes\n"
+        "Block size = %u bytes\n"
         "Status: %s, write backlog: %d (%.2f%%), buffer %d bytes\n"
-        "Blocks: %d of %d\n",
+        "Segments: %d of %d\n",
         header->h.signature, header->h.version,
         data_size, header->h.data_size,
         header->h.data_start,
+        header->h.block_size,
         status, header->h.write_backlog / FA_FRAME_SIZE,
         100.0 * header->h.write_backlog / header->h.write_buffer,
         header->h.write_buffer,
@@ -120,7 +146,10 @@ void print_header(FILE *out, struct disk_header *header)
         int64_t length = stop - start;
         if (length <= 0)
             length += data_size;
-        fprintf(out, "%3d: %lld-%lld (%lld frames)\n", i, start, stop, length);
+        fprintf(out, "%3d: %lld-%lld (%lld frames, duration ",
+            i, start, stop, length);
+        print_duration(out, length);
+        fprintf(out, ")\n");
     }
 }
 

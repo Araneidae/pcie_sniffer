@@ -1,7 +1,7 @@
 /* Filter mask routines. */
 
 /* Bit mask of BPM ids, array of 256 bits. */
-typedef uint32_t filter_mask_t[256/32];
+typedef uint32_t filter_mask_t[FA_ENTRY_COUNT/32];
 
 
 static inline void set_mask_bit(filter_mask_t mask, int bit)
@@ -31,10 +31,14 @@ void print_mask(FILE *out, filter_mask_t mask);
  *  range = number "-" number
  *
  * Prints error message and returns false if parsing fails. */
-bool parse_mask(char *string, filter_mask_t mask);
+bool parse_mask(const char *string, filter_mask_t mask);
 
 /* Copies a single FA frame taking the mask into account, returns the number
  * of bytes copied into the target buffer (will be 8*count_mask_bits(mask)).
  * 'from' should point to a completely populated frame, 'to' will contain X,Y
  * pairs in ascending numerical order for bits set in mask. */
 int copy_frame(void *to, void *from, filter_mask_t mask);
+
+/* Writes the selected number of masked frames to the given file, returning
+ * false if writing fails. */
+bool write_frames(int file, filter_mask_t mask, void *frame, int count);

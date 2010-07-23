@@ -88,7 +88,7 @@ void print_error(const char * message, ...)
         snprintf(error_message + Count, MESSAGE_LENGTH - Count,
             ": (%d) %s", error, strerror_r(error, StrError, sizeof(StrError)));
     }
-    log_error("%s\n", error_message);
+    log_error("%s", error_message);
 }
 
 

@@ -15,7 +15,10 @@
 #include <errno.h>
 
 #include "error.h"
+#include "sniffer.h"
 #include "archiver.h"
+#include "mask.h"
+#include "buffer.h"
 #include "socket_server.h"
 
 
@@ -64,9 +67,28 @@ static void process_read(int scon, char *buf, ssize_t rx)
 }
 
 
+/* A subscription is a command of the form S<mask> where <mask> is a mask
+ * specification as described in mask.h.  The default mask is empty. */
 static void process_subscribe(int scon, char *buf, ssize_t rx)
 {
-    write_string(scon, "Not implemented\n");
+    filter_mask_t mask;
+    if (parse_mask(buf + 1, mask))
+    {
+        struct reader_state *reader = open_reader(false);
+        bool ok = true;
+        while (ok)
+        {
+            void *block = get_read_block(reader, NULL);
+            ok = TEST_OK(block != NULL);
+            if (ok)
+            {
+                ok = write_frames(
+                    scon, mask, block, fa_block_size / FA_FRAME_SIZE);
+                ok = TEST_OK(release_read_block(reader))  &&  ok;
+            }
+        }
+        close_reader(reader);
+    }
 }
 
 

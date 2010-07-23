@@ -15,6 +15,7 @@
 #include <time.h>
 
 #include "error.h"
+#include "sniffer.h"
 #include "disk.h"
 #include "mask.h"
 
