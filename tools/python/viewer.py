@@ -214,25 +214,27 @@ class mode_fft(mode_common):
         self.parent = parent
         self.label = QtGui.QLabel('Decimation', parent.ui)
         self.selector = QtGui.QComboBox(parent.ui)
-        parent.ui.mode_action.addWidget(self.label)
-        parent.ui.mode_action.addWidget(self.selector)
+        parent.ui.bottom_row.addWidget(self.label)
+        parent.ui.bottom_row.addWidget(self.selector)
         parent.connect(self.selector,
             'currentIndexChanged(int)', self.set_decimation)
         self.set_enable(False)
-        # Decimation setting control
         self.decimation = 1
-        self.setting = False
 
     def set_timebase(self, timebase):
         self.xaxis = fft_timebase(timebase, 1e-3)
 
         # Manage the set of available decimations
         self.timebase = timebase
-        self.setting = True
+
+        # Update selection of decimations to match those available for the
+        # selected decimation
+        self.selector.blockSignals(True)
         self.selector.clear()
         valid_items = [n for n in self.Decimations if 1000 * n <= timebase]
         self.selector.addItems(['%d:1' % n for n in valid_items])
-        self.setting = False
+        self.selector.blockSignals(False)
+
         # Restore the current selection, as far as possible.
         if self.decimation not in valid_items:
             self.decimation = valid_items[-1]
@@ -244,9 +246,8 @@ class mode_fft(mode_common):
         self.selector.setVisible(enabled)
 
     def set_decimation(self, ix):
-        if not self.setting:
-            self.decimation = self.Decimations[ix]
-            self.xaxis = fft_timebase(self.timebase // self.decimation, 1e-3)
+        self.decimation = self.Decimations[ix]
+        self.xaxis = fft_timebase(self.timebase // self.decimation, 1e-3)
 
     def compute(self, value):
         if self.decimation == 1:
@@ -330,7 +331,7 @@ class mode_integrated(mode_common):
     def __init__(self, parent):
         self.parent = parent
         self.button = QtGui.QPushButton('Background', parent.ui)
-        parent.ui.mode_action.addWidget(self.button)
+        parent.ui.bottom_row.addWidget(self.button)
         parent.connect(self.button, 'clicked()', self.set_background)
         self.cxb = parent.makecurve(QtCore.Qt.blue, True)
         self.cyb = parent.makecurve(QtCore.Qt.red,  True)
@@ -360,9 +361,12 @@ INITIAL_MODE = 0
 # This is the implementation of the viewer as a Qt display application.
 
 
-BPM_list = [
-    'SR%02dC-DI-EBPM-%02d' % (c+1, n+1)
-    for c in range(24) for n in range(7)]
+BPM_list = [('Other', [])] + [
+    ('Cell %d' % (c+1),
+     [('SR%02dC-DI-EBPM-%02d' % (c+1, n+1), 7*c+n+1) for n in range(7)])
+    for c in range(24)]
+BPM_list[21][1].append(('SR21C-DI-EBPM-08', 169))
+
 
 # Start on BPM #1 -- as sensible a default as any
 INITIAL_BPM = 0
@@ -403,37 +407,38 @@ class Viewer:
         # Prepare the selections in the controls
         ui.timebase.addItems([l[0] for l in Timebase_list])
         ui.mode.addItems([l.mode_name for l in Display_modes])
-        ui.channel.addItems(BPM_list)
+        ui.channel_group.addItems([l[0] for l in BPM_list])
         ui.show_curves.addItems(['Show X&Y', 'Show X', 'Show Y'])
 
-        # For each possible display mode create the initial state used to manage
-        # that display mode.
-        self.mode_list = [l(self) for l in Display_modes]
+        ui.channel_id.setValidator(QtGui.QIntValidator(0, 255, ui))
 
-        # Select initial state:
-        #   Initial BPM selection
-        self.ui.channel.setCurrentIndex(INITIAL_BPM)
-        self.monitor.set_id(INITIAL_BPM+1)
-        #   Initial display mode
-        self.ui.mode.setCurrentIndex(INITIAL_MODE)
+        # For each possible display mode create the initial state used to manage
+        # that display mode and set up the initial display mode.
+        self.mode_list = [l(self) for l in Display_modes]
         self.mode = self.mode_list[INITIAL_MODE]
         self.mode.set_enable(True)
-        #   Initial timebase
-        self.ui.timebase.setCurrentIndex(INITIAL_TIMEBASE)
-        self.select_timebase(INITIAL_TIMEBASE)
-        # Go!
-        self.monitor.start()
+        self.ui.mode.setCurrentIndex(INITIAL_MODE)
 
         # Make the initial GUI connections
+        self.connect(ui.channel_group,
+            'currentIndexChanged(int)', self.set_group)
         self.connect(ui.channel,
-            'currentIndexChanged(int)', self.select_channel)
+            'currentIndexChanged(int)', self.set_channel)
+        self.connect(ui.channel_id, 'editingFinished()', self.set_channel_id)
         self.connect(ui.timebase,
-            'currentIndexChanged(int)', self.select_timebase)
+            'currentIndexChanged(int)', self.set_timebase)
         self.connect(ui.rescale, 'clicked()', self.rescale_graph)
-        self.connect(ui.mode, 'currentIndexChanged(int)', self.select_mode)
+        self.connect(ui.mode, 'currentIndexChanged(int)', self.set_mode)
         self.connect(ui.run, 'clicked(bool)', self.toggle_running)
         self.connect(ui.show_curves,
             'currentIndexChanged(int)', self.show_curves)
+
+        # Initial control settings: these all trigger GUI related actions.
+        ui.channel_group.setCurrentIndex(1)
+        ui.channel.setCurrentIndex(0)
+        ui.timebase.setCurrentIndex(INITIAL_TIMEBASE)
+        # Go!
+        self.monitor.start()
 
     def connect(self, control, signal, action):
         '''Connects a Qt signal from a control to the selected action.'''
@@ -474,21 +479,40 @@ class Viewer:
     # --------------------------------------------------------------------------
     # GUI event handlers
 
-    def select_channel(self, ix):
-        self.monitor.set_id(ix + 1)
+    def set_group(self, ix):
+        self.group_index = ix
+        self.ui.channel_id.setVisible(ix == 0)
+        self.ui.channel.setVisible(ix > 0)
+
+        if ix == 0:
+            self.ui.channel_id.setText(str(self.channel))
+        else:
+            self.ui.channel.blockSignals(True)
+            self.ui.channel.clear()
+            self.ui.channel.addItems([l[0] for l in BPM_list[ix][1]])
+            self.ui.channel.setCurrentIndex(-1)
+            self.ui.channel.blockSignals(False)
+
+    def set_channel(self, ix):
+        self.channel = BPM_list[self.group_index][1][ix][1]
+        self.monitor.set_id(self.channel)
+
+    def set_channel_id(self):
+        self.channel = int(self.ui.channel_id.text())
+        self.monitor.set_id(self.channel)
 
     def rescale_graph(self):
         self.mode.rescale(self.monitor.read())
         self.p.setAxisScale(Qwt5.QwtPlot.yLeft, self.mode.ymin, self.mode.ymax)
         self.p.replot()
 
-    def select_timebase(self, ix):
+    def set_timebase(self, ix):
         new_timebase = Timebase_list[ix][1]
         self.timebase = new_timebase
         self.monitor.resize(new_timebase, min(new_timebase, SCROLL_THRESHOLD))
         self.reset_mode()
 
-    def select_mode(self, ix):
+    def set_mode(self, ix):
         self.mode.set_enable(False)
         self.mode = self.mode_list[ix]
         self.mode.set_enable(True)

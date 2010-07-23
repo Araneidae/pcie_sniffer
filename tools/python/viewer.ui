@@ -13,46 +13,52 @@
   <property name="windowTitle">
    <string>FA Sniffer Viewer</string>
   </property>
-  <layout class="QVBoxLayout" name="verticalLayout_2">
+  <layout class="QVBoxLayout" name="verticalLayout">
    <item>
     <widget class="QwtPlot" name="plot"/>
    </item>
    <item>
     <layout class="QHBoxLayout" name="horizontalLayout">
      <item>
-      <widget class="QLabel" name="textLabel1">
-       <property name="text">
-        <string>Channel</string>
+      <widget class="QComboBox" name="channel_group"/>
+     </item>
+     <item>
+      <widget class="QComboBox" name="channel">
+       <property name="sizePolicy">
+        <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+         <horstretch>0</horstretch>
+         <verstretch>0</verstretch>
+        </sizepolicy>
        </property>
-       <property name="wordWrap">
+       <property name="editable">
         <bool>false</bool>
        </property>
+       <item>
+        <property name="text">
+         <string>SR01C-DI-EBPM-99</string>
+        </property>
+       </item>
       </widget>
      </item>
      <item>
-      <widget class="QComboBox" name="channel"/>
-     </item>
-     <item>
-      <widget class="QLabel" name="label">
-       <property name="text">
-        <string>Timebase</string>
+      <widget class="QLineEdit" name="channel_id">
+       <property name="sizePolicy">
+        <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+         <horstretch>0</horstretch>
+         <verstretch>0</verstretch>
+        </sizepolicy>
        </property>
-      </widget>
-     </item>
-     <item>
-      <widget class="QComboBox" name="timebase"/>
-     </item>
-     <item>
-      <widget class="QPushButton" name="rescale">
-       <property name="text">
-        <string>Rescale</string>
+       <property name="minimumSize">
+        <size>
+         <width>0</width>
+         <height>0</height>
+        </size>
        </property>
-      </widget>
-     </item>
-     <item>
-      <widget class="QCheckBox" name="autoscale">
-       <property name="text">
-        <string>Auto Scale</string>
+       <property name="maximumSize">
+        <size>
+         <width>60</width>
+         <height>16777215</height>
+        </size>
        </property>
       </widget>
      </item>
@@ -66,11 +72,21 @@
        </property>
        <property name="sizeHint" stdset="0">
         <size>
-         <width>13</width>
+         <width>0</width>
          <height>20</height>
         </size>
        </property>
       </spacer>
+     </item>
+     <item>
+      <widget class="QLabel" name="label">
+       <property name="text">
+        <string>Timebase</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QComboBox" name="timebase"/>
      </item>
      <item>
       <widget class="QCheckBox" name="run">
@@ -88,7 +104,7 @@
     </layout>
    </item>
    <item>
-    <layout class="QHBoxLayout" name="mode_action">
+    <layout class="QHBoxLayout" name="bottom_row">
      <item>
       <widget class="QLabel" name="x_position">
        <property name="sizePolicy">
@@ -141,6 +157,20 @@
      </item>
      <item>
       <widget class="QComboBox" name="show_curves"/>
+     </item>
+     <item>
+      <widget class="QPushButton" name="rescale">
+       <property name="text">
+        <string>Rescale</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QCheckBox" name="autoscale">
+       <property name="text">
+        <string>Auto Scale</string>
+       </property>
+      </widget>
      </item>
      <item>
       <spacer name="horizontalSpacer">
