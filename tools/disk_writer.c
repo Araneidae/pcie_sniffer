@@ -153,7 +153,7 @@ static struct reader_state *reader;
 static bool writer_running;
 
 
-static void * get_valid_read_block(struct reader_state *reader, bool archiving)
+static void * get_valid_read_block(bool archiving)
 {
     int backlog;
     void *block = get_read_block(reader, &backlog);
@@ -185,7 +185,7 @@ static void * writer_thread(void *context)
 {
     /* Start by getting the initial data block, ignoring any initial gap.
      * Start a fresh archive block at this point. */
-    void *block = get_valid_read_block(reader, false);
+    void *block = get_valid_read_block(false);
     start_archive_block();
     ASSERT_IO(lseek(disk_fd, data_start + write_offset, SEEK_SET));
 
@@ -203,7 +203,7 @@ static void * writer_thread(void *context)
         update_header(false);
 
         /* Go and get the next block to be written. */
-        block = get_valid_read_block(reader, true);
+        block = get_valid_read_block(true);
     }
 
     return NULL;

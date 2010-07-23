@@ -26,12 +26,11 @@
 
 static char *argv0;
 
-uint64_t data_size;
 char * file_name;
 bool header_only = false;
 
 
-void usage(void)
+static void usage(void)
 {
     printf(
 "Usage: %s [options] <file-name> <disk-size>\n"
@@ -45,7 +44,7 @@ void usage(void)
         , argv0);
 }
 
-bool read_disk_size(const char *string, uint64_t *size)
+static bool read_disk_size(const char *string, uint64_t *size)
 {
     char *end;
     *size = strtoll(string, &end, 0);
@@ -61,7 +60,7 @@ bool read_disk_size(const char *string, uint64_t *size)
 }
 
 
-bool process_opts(int *argc, char ***argv)
+static bool process_opts(int *argc, char ***argv)
 {
     argv0 = (*argv)[0];
     bool ok = true;
@@ -85,8 +84,9 @@ bool process_opts(int *argc, char ***argv)
 }
 
 
-bool process_args(int argc, char **argv)
+static bool process_args(int argc, char **argv, uint64_t *data_size)
 {
+/* Helper macro to consume a mandatory argument or complain if it's missing. */
 #define PROCESS_ARG(missing, action) \
     ( TEST_OK_(argc >= 1, missing " argument missing")  && \
       action  && \
@@ -97,10 +97,10 @@ bool process_args(int argc, char **argv)
             DO_(file_name = *argv))  &&
         IF_(!header_only,
             PROCESS_ARG("File size",
-                read_disk_size(*argv, &data_size)  &&
-                TEST_OK_(data_size % DATA_LOCK_BLOCK_SIZE == 0,
+                read_disk_size(*argv, data_size)  &&
+                TEST_OK_(*data_size % DATA_LOCK_BLOCK_SIZE == 0,
                     "Data size %llu must be multiple of %d",
-                    data_size, DATA_LOCK_BLOCK_SIZE)))  &&
+                    *data_size, DATA_LOCK_BLOCK_SIZE)))  &&
         TEST_OK_(argc == 0, "Too many arguments");
 #undef PROCESS_ARG
 }
@@ -111,7 +111,7 @@ bool process_args(int argc, char **argv)
 /*****************************************************************************/
 
 
-bool write_new_header(int file_fd, uint64_t data_size)
+static bool write_new_header(int file_fd, uint64_t data_size)
 {
     struct disk_header *header;
     bool ok = TEST_NULL(header = valloc(DISK_HEADER_SIZE));
@@ -128,7 +128,7 @@ bool write_new_header(int file_fd, uint64_t data_size)
 }
 
 
-void show_progress(uint64_t n, uint64_t final_n)
+static void show_progress(uint64_t n, uint64_t final_n)
 {
     const char *progress = "|/-\\";
     if (n % PROGRESS_INTERVAL == 0)
@@ -141,7 +141,7 @@ void show_progress(uint64_t n, uint64_t final_n)
 }
 
 
-bool fill_zeros(int file_fd, uint64_t size)
+static bool fill_zeros(int file_fd, uint64_t size)
 {
     void *zeros = valloc(ZEROS_BLOCK_SIZE);
     if (!TEST_NULL(zeros))
@@ -165,7 +165,7 @@ bool fill_zeros(int file_fd, uint64_t size)
 
 /* Computes a data size compatible with the given file size. */
 
-bool compute_data_size(int file_fd, uint64_t *data_size)
+static bool compute_data_size(int file_fd, uint64_t *data_size)
 {
     uint64_t file_size;
     return
@@ -179,9 +179,10 @@ bool compute_data_size(int file_fd, uint64_t *data_size)
 
 int main(int argc, char **argv)
 {
+    uint64_t data_size = 0;
     bool ok =
         process_opts(&argc, &argv)  &&
-        process_args(argc, argv);
+        process_args(argc, argv, &data_size);
     if (!ok)
         /* For argument errors return 1. */
         return 1;

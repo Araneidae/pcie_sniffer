@@ -31,7 +31,7 @@ static bool daemon_mode = false;
 /*****************************************************************************/
 
 static char *argv0;
-static char *fa_sniffer_device = "/dev/fa_sniffer0";
+static const char *fa_sniffer_device = "/dev/fa_sniffer0";
 static char *output_filename = NULL;
 static char *pid_filename = NULL;
 /* A good default buffer size is 8K blocks, or 256MB. */
@@ -54,7 +54,7 @@ static void usage(void)
         , argv0);
 }
 
-static bool read_size(char *string, unsigned int *result)
+static bool read_size(const char *string, unsigned int *result)
 {
     char *end;
     *result = strtoul(string, &end, 0);
@@ -138,7 +138,7 @@ static bool initialise_signals(void)
 }
 
 
-static bool maybe_daemonise()
+static bool maybe_daemonise(void)
 {
     int pid_file = -1;
     char pid[32];

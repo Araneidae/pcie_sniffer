@@ -132,10 +132,10 @@ bool get_filesize(int disk_fd, uint64_t *file_size)
         return true;
     else
     {
-        struct stat stat;
+        struct stat st;
         return
-            TEST_IO(fstat(disk_fd, &stat))  &&
-            DO_(*file_size = stat.st_size)  &&
+            TEST_IO(fstat(disk_fd, &st))  &&
+            DO_(*file_size = st.st_size)  &&
             TEST_OK_(*file_size > 0,
                 "Zero file size.  Maybe stat failed?");
     }

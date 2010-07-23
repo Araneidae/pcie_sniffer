@@ -188,7 +188,7 @@ static void compute_mask_ids(uint8_t *array, filter_mask_t mask)
 }
 
 
-static void write_matlab_string(int32_t **hh, char *string)
+static void write_matlab_string(int32_t **hh, const char *string)
 {
     int32_t *h = *hh;
     int l = strlen(string);
@@ -201,7 +201,7 @@ static void write_matlab_string(int32_t **hh, char *string)
 /* Returns the number of bytes of padding required after data_length bytes of
  * following data to ensure that the entire matrix is padded to 8 bytes. */
 static int write_matrix_header(
-    int32_t **hh, int class, char *name,
+    int32_t **hh, int class, const char *name,
     int data_type, int data_length,
     int dimensions, ...)
 {
@@ -237,16 +237,16 @@ static int write_matrix_header(
 
 static void write_matlab_header(void)
 {
-    char header[4096];
-    memset(header, 0, sizeof(header));
+    char mat_header[4096];
+    memset(mat_header, 0, sizeof(mat_header));
 
     /* The first 128 bytes are the description and format marks. */
-    memset(header, ' ', 124);
-    sprintf(header, "MATLAB 5.0 MAT-file generated from FA sniffer data");
-    header[strlen(header)] = ' ';
-    *(uint16_t *)&header[124] = 0x0100;   // Version flag
-    *(uint16_t *)&header[126] = 0x4d49;   // 'IM' endian mark
-    int32_t *h = (int32_t *)&header[128];
+    memset(mat_header, ' ', 124);
+    sprintf(mat_header, "MATLAB 5.0 MAT-file generated from FA sniffer data");
+    mat_header[strlen(mat_header)] = ' ';
+    *(uint16_t *)&mat_header[124] = 0x0100;   // Version flag
+    *(uint16_t *)&mat_header[126] = 0x4d49;   // 'IM' endian mark
+    int32_t *h = (int32_t *)&mat_header[128];
 
     int mask_length = count_mask_bits(filter_mask);
 
@@ -256,13 +256,13 @@ static void write_matlab_header(void)
     compute_mask_ids((uint8_t *)h, filter_mask);
     h = (int32_t *)((char *)h + mask_length + padding);
 
-    /* Finally write out the matrix header for the fa data. */
+    /* Finally write out the matrix mat_header for the fa data. */
     write_matrix_header(&h,
         matlab_double ? mxDOUBLE_CLASS : mxINT32_CLASS,
         "fa", miINT32, dump_length * mask_length * 8,
         3, 2, mask_length, dump_length);
 
-    ASSERT_write(file_out, header, (char *) h - header);
+    ASSERT_write(file_out, mat_header, (char *) h - mat_header);
 }
 
 
