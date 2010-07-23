@@ -34,6 +34,7 @@ archiver_SRCS += buffer.c
 archiver_SRCS += sniffer.c
 archiver_SRCS += disk_writer.c
 archiver_SRCS += disk.c
+archiver_SRCS += socket_server.c
 
 read_SRCS += read.c
 read_SRCS += error.c

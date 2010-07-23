@@ -17,25 +17,31 @@
 #include "buffer.h"
 #include "sniffer.h"
 #include "disk_writer.h"
+#include "socket_server.h"
+#include "archiver.h"
 
 
 #define K               1024
-#define FA_BLOCK_SIZE   (64 * K)    // Block size for device read
+/* An experiment shows that a disk block transfer size of 512K is optimal in the
+ * sense of being the largest single block transfer size. */
+#define FA_BLOCK_SIZE   (512 * K)    // Block size for device read
+/* A good default buffer size is 256MB. */
+#define BUFFER_SIZE     (256 * K * K)
 
 
-static bool daemon_mode = false;
 
 
 /*****************************************************************************/
 /*                               Option Parsing                              */
 /*****************************************************************************/
 
+static bool daemon_mode = false;
 static char *argv0;
 static const char *fa_sniffer_device = "/dev/fa_sniffer0";
 static char *output_filename = NULL;
 static char *pid_filename = NULL;
-/* A good default buffer size is 8K blocks, or 256MB. */
-static unsigned int buffer_size = 8 * K * FA_BLOCK_SIZE;
+static unsigned int buffer_size = BUFFER_SIZE;
+static int server_socket = 8888;
 
 
 
@@ -51,6 +57,7 @@ static void usage(void)
 "    -v   Specify verbose output\n"
 "    -D   Run as a daemon\n"
 "    -p:  Write PID to specified file\n"
+"    -s:  Specify server socket (default 8888)\n"
         , argv0);
 }
 
@@ -58,7 +65,7 @@ static bool read_size(const char *string, unsigned int *result)
 {
     char *end;
     *result = strtoul(string, &end, 0);
-    if (TEST_OK_(end > string, "nothing specified for option")) {
+    if (TEST_OK_(end > string, "Nothing specified for option")) {
         switch (*end) {
             case 'K':   end++;  *result *= K;           break;
             case 'M':   end++;  *result *= K * K;       break;
@@ -71,13 +78,22 @@ static bool read_size(const char *string, unsigned int *result)
 }
 
 
+static bool read_int(const char *string, int *result)
+{
+    char *end;
+    *result = strtol(string, &end, 10);
+    return TEST_OK_(end > string  &&  *end == 0,
+        "Malformed number: \"%s\"", string);
+}
+
+
 static bool process_options(int *argc, char ***argv)
 {
     argv0 = (*argv)[0];
     bool ok = true;
     while (ok)
     {
-        switch (getopt(*argc, *argv, "+hd:b:vDp:"))
+        switch (getopt(*argc, *argv, "+hd:b:vDp:s:"))
         {
             case 'h':   usage();                                    exit(0);
             case 'd':   fa_sniffer_device = optarg;                 break;
@@ -85,6 +101,7 @@ static bool process_options(int *argc, char ***argv)
             case 'v':   verbose_logging(true);                      break;
             case 'D':   daemon_mode = true;                         break;
             case 'p':   pid_filename = optarg;                      break;
+            case 's':   ok = read_int(optarg, &server_socket);      break;
             default:
                 fprintf(stderr, "Try `%s -h` for usage\n", argv0);
                 return false;
@@ -115,12 +132,16 @@ static bool process_args(int argc, char **argv)
 static sem_t shutdown_semaphore;
 
 
-static void at_exit(int signal)
+void shutdown_archiver(void)
 {
-    log_message("Signal caught");
-    if (pid_filename)
-        TEST_IO(unlink(pid_filename));
     ASSERT_IO(sem_post(&shutdown_semaphore));
+}
+
+
+static void at_exit(int signum)
+{
+    log_message("Caught signal %d", signum);
+    shutdown_archiver();
 }
 
 static bool initialise_signals(void)
@@ -173,20 +194,24 @@ int main(int argc, char **argv)
          * means that many startup errors go into syslog rather than stderr. */
         initialise_buffer(FA_BLOCK_SIZE, buffer_size / FA_BLOCK_SIZE)  &&
         initialise_disk_writer(output_filename, buffer_size)  &&
-        initialise_sniffer(fa_sniffer_device);
+        initialise_sniffer(fa_sniffer_device)  &&
+        initialise_server(server_socket);
 
     if (ok)
     {
         log_message("Started");
 
-        /* Wait for a shutdown signal.  We actually ignore the signal, instead
-         * waiting for the clean shutdown request. */
+        /* Wait for a shutdown signal.  Ignore the signal, instead waiting for
+         * the clean shutdown request. */
         while (sem_wait(&shutdown_semaphore) == -1  &&  TEST_OK(errno == EINTR))
-            ; /* Repeat wait while we see errno. */
+            ; /* Repeat wait while we see EINTR. */
 
         log_message("Shutting down");
+        terminate_server();
         terminate_sniffer();
         terminate_disk_writer();
+        if (pid_filename)
+            TEST_IO(unlink(pid_filename));
         log_message("Shut Down");
     }
 }
