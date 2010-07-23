@@ -89,7 +89,9 @@ static void process_subscribe(int scon, char *buf, ssize_t rx)
             {
                 ok = write_frames(
                     scon, mask, block, fa_block_size / FA_FRAME_SIZE);
-                ok = TEST_OK(release_read_block(reader))  &&  ok;
+                ok = TEST_OK_(
+                    release_read_block(reader),
+                    "Write underrun to client")  &&  ok;
             }
         }
         close_reader(reader);
@@ -138,10 +140,17 @@ static void * process_connection(void *context)
 static void * run_server(void *context)
 {
     int sock = (int)(intptr_t) context;
+    /* Note that we need to create the spawned threads with DETACHED attribute,
+     * otherwise we accumlate internal joinable state information and eventually
+     * run out of resources. */
+    pthread_attr_t attr;
+    ASSERT_0(pthread_attr_init(&attr));
+    ASSERT_0(pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED));
+
     int scon;
     pthread_t thread;
     while (TEST_IO(scon = accept(sock, NULL, NULL)))
-        TEST_0(pthread_create(&thread, NULL, 
+        TEST_0(pthread_create(&thread, &attr,
             process_connection, (void *)(intptr_t) scon));
     return NULL;
 }
