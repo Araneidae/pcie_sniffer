@@ -6,7 +6,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>600</width>
+    <width>658</width>
     <height>480</height>
    </rect>
   </property>
@@ -14,8 +14,14 @@
    <string>Scope Example</string>
   </property>
   <layout class="QGridLayout">
-   <item row="0" column="0" colspan="4">
+   <item row="0" column="0" colspan="8">
     <widget class="QFrame" name="axes">
+     <property name="sizePolicy">
+      <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+       <horstretch>0</horstretch>
+       <verstretch>0</verstretch>
+      </sizepolicy>
+     </property>
      <property name="frameShape">
       <enum>QFrame::NoFrame</enum>
      </property>
@@ -24,17 +30,17 @@
      </property>
     </widget>
    </item>
-   <item row="1" column="3">
+   <item row="1" column="5">
     <spacer name="spacer1">
      <property name="orientation">
       <enum>Qt::Horizontal</enum>
      </property>
      <property name="sizeType">
-      <enum>QSizePolicy::Expanding</enum>
+      <enum>QSizePolicy::MinimumExpanding</enum>
      </property>
      <property name="sizeHint" stdset="0">
       <size>
-       <width>217</width>
+       <width>0</width>
        <height>20</height>
       </size>
      </property>
@@ -54,11 +60,34 @@
     <widget class="QComboBox" name="channel"/>
    </item>
    <item row="1" column="2">
-    <widget class="QPushButton" name="bConnect">
+    <widget class="QLabel" name="label">
      <property name="text">
-      <string>Connect</string>
+      <string>Timebase</string>
      </property>
     </widget>
+   </item>
+   <item row="1" column="4">
+    <widget class="QPushButton" name="rescale">
+     <property name="text">
+      <string>Rescale</string>
+     </property>
+    </widget>
+   </item>
+   <item row="1" column="7">
+    <widget class="QComboBox" name="mode"/>
+   </item>
+   <item row="1" column="6">
+    <widget class="QCheckBox" name="run">
+     <property name="text">
+      <string>Run</string>
+     </property>
+     <property name="checked">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item row="1" column="3">
+    <widget class="QComboBox" name="timebase"/>
    </item>
   </layout>
  </widget>
@@ -67,10 +96,10 @@
  <resources/>
  <connections>
   <connection>
-   <sender>bConnect</sender>
-   <signal>clicked()</signal>
+   <sender>channel</sender>
+   <signal>currentIndexChanged(int)</signal>
    <receiver>Scope</receiver>
-   <slot>bConnect_clicked()</slot>
+   <slot>channel_currentIndexChanged()</slot>
    <hints>
     <hint type="sourcelabel">
      <x>20</x>
@@ -79,6 +108,70 @@
     <hint type="destinationlabel">
      <x>20</x>
      <y>20</y>
+    </hint>
+   </hints>
+  </connection>
+  <connection>
+   <sender>rescale</sender>
+   <signal>clicked()</signal>
+   <receiver>Scope</receiver>
+   <slot>rescale_clicked()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>353</x>
+     <y>457</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>299</x>
+     <y>239</y>
+    </hint>
+   </hints>
+  </connection>
+  <connection>
+   <sender>mode</sender>
+   <signal>currentIndexChanged(int)</signal>
+   <receiver>Scope</receiver>
+   <slot>mode_currentIndexChanged()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>20</x>
+     <y>20</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>20</x>
+     <y>20</y>
+    </hint>
+   </hints>
+  </connection>
+  <connection>
+   <sender>run</sender>
+   <signal>clicked(bool)</signal>
+   <receiver>Scope</receiver>
+   <slot>run_clicked()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>538</x>
+     <y>457</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>328</x>
+     <y>239</y>
+    </hint>
+   </hints>
+  </connection>
+  <connection>
+   <sender>timebase</sender>
+   <signal>currentIndexChanged(int)</signal>
+   <receiver>Scope</receiver>
+   <slot>timebase_currentIndexChanged()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>248</x>
+     <y>457</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>299</x>
+     <y>239</y>
     </hint>
    </hints>
   </connection>

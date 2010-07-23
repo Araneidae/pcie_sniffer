@@ -54,7 +54,17 @@ class monitor:
     def monitor(self):
         while self.running:
             data = self.connection.read(self.size)
-            self.on_event(data[:,0,:] * 1e-6)
+            self.on_event(data[:, 0, :] * 1e-6)
+
+
+BPM_list = [
+    'SR%02dC-DI-EBPM-%02d' % (c+1, n+1)
+    for c in range(24) for n in range(7)]
+
+Timebase_list = [
+    ('100ms', 1000),    ('250ms', 2500),    ('0.5s', 5000),
+    ('1s', 10000),      ('2.5s', 25000),    ('5s', 50000),
+    ('10s', 100000),    ('25s', 250000),    ('50s', 500000)]
 
 
 # subclass form to implement buttons
@@ -64,25 +74,41 @@ class Viewer(widget, Ui_Viewer):
         widget.__init__(self)
         self.setupUi(self)
 
-        self.channel.addItems([
-            'SR%02dC-DI-EBPM-%02d' % (c+1, n+1)
-            for c in range(24) for n in range(7)])
         self.monitor = None
+        self.channel.addItems(BPM_list)
+        self.timebase.addItems([l[0] for l in Timebase_list])
+        self.mode.addItems(['Raw Signal', 'FFT', 'Integrated'])
         # make any contents fill the empty frame
         grid = QtGui.QGridLayout(self.axes)
         self.axes.setLayout(grid)
         self.makeplot()
 
-    def bConnect_clicked(self):
-        id = self.channel.currentIndex() + 1
+    def channel_currentIndexChanged(self, ix):
         # disconnect old channel if any
         if self.monitor:
             self.monitor.close()
         # connect new channel
-        self.monitor = monitor(self.on_event, id, 2500)
+        self.monitor = monitor(self.on_event, ix + 1, 1000)
+
+    def rescale_clicked(self):
+        min = numpy.amin(self.value)
+        max = numpy.amax(self.value)
+        self.p.setAxisScale(Qwt5.QwtPlot.yLeft, 1.2*min, 1.2*max)
+
+    def timebase_currentIndexChanged(self, ix):
+        new_timebase = Timebase_list[ix][1]
+        self.p.setAxisScale(Qwt5.QwtPlot.xBottom, 0, new_timebase)
+        self.monitor.resize(new_timebase)
+
+    def mode_currentIndexChanged(self, ix):
+        print 'new mode', ix
+
+    def run_clicked(self, running):
+        print 'running', running
 
     def on_event(self, value):
         '''camonitor callback'''
+        self.value = value
         t = numpy.arange(value.shape[0])
         self.c1.setData(t, value[:, 0])
         self.c2.setData(t, value[:, 1])
@@ -105,7 +131,7 @@ class Viewer(widget, Ui_Viewer):
         p.canvas().setFocusIndicator(Qwt5.QwtPlotCanvas.NoFocusIndicator)
         # set fixed scale
         p.setAxisScale(Qwt5.QwtPlot.yLeft, -0.1, 0.1)
-        p.setAxisScale(Qwt5.QwtPlot.xBottom, 0, 2500)
+        p.setAxisScale(Qwt5.QwtPlot.xBottom, 0, 1000)
         # Set up manual zooming
         z = Qwt5.QwtPlotZoomer(p.canvas())
         z.setRubberBandPen(QtGui.QPen(QtCore.Qt.white))
