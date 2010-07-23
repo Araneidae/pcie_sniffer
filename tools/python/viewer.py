@@ -124,6 +124,8 @@ char_mu     = u'\u03BC'             # Greek mu
 char_sqrt   = u'\u221A'             # Square root sign
 char_cdot   = u'\u22C5'             # Centre dot
 
+micrometre  = char_mu + 'm'
+
 
 class mode_common:
     def __init__(self, parent):
@@ -150,7 +152,8 @@ class mode_common:
 
 class mode_raw(mode_common):
     mode_name = 'Raw Signal'
-    yname = 'Position (%sm)' % char_mu
+    yname = 'Position'
+    yunits = micrometre
     xscale = Qwt5.QwtLinearScaleEngine
     yscale = Qwt5.QwtLinearScaleEngine
     xmin = 0
@@ -161,10 +164,12 @@ class mode_raw(mode_common):
 
     def set_timebase(self, timebase):
         if timebase <= 10000:
-            self.xname = 'Time (ms)'
+            self.xname = 'Time'
+            self.xunits = 'ms'
             scale = 1e3
         else:
-            self.xname = 'Time (s)'
+            self.xname = 'Time'
+            self.xunits = 's'
             scale = 1.0
         self.xmax = scale / F_S * timebase
         self.xaxis = scale / F_S * numpy.arange(timebase)
@@ -198,8 +203,10 @@ def fft_timebase(timebase, scale=1.0):
 
 class mode_fft(mode_common):
     mode_name = 'FFT'
-    xname = 'Frequency (kHz)'
-    yname = 'Amplitude (%sm/%sHz)' % (char_mu, char_sqrt)
+    xname = 'Frequency'
+    yname = 'Amplitude'
+    xunits = 'kHz'
+    yunits = '%s/%sHz' % (micrometre, char_sqrt)
     xscale = Qwt5.QwtLinearScaleEngine
     yscale = Qwt5.QwtLog10ScaleEngine
     xmin = 0
@@ -289,8 +296,10 @@ def condense(value, counts):
 
 class mode_fft_logf(mode_common):
     mode_name = 'FFT (log f)'
-    xname = 'Frequency (Hz)'
-    yname = 'Amplitude freq (%sm%s%sHz)' % (char_mu, char_cdot, char_sqrt)
+    xname = 'Frequency'
+    yname = 'Amplitude freq'
+    xunits = 'Hz'
+    yunits = '%s%s%sHz' % (micrometre, char_cdot, char_sqrt)
     xscale = Qwt5.QwtLog10ScaleEngine
     yscale = Qwt5.QwtLog10ScaleEngine
     xmax = F_S / 2
@@ -310,8 +319,10 @@ class mode_fft_logf(mode_common):
 
 class mode_integrated(mode_common):
     mode_name = 'Integrated'
-    xname = 'Frequency (Hz)'
-    yname = 'Cumulative amplitude (%sm)' % char_mu
+    xname = 'Frequency'
+    yname = 'Cumulative amplitude'
+    xunits = 'Hz'
+    yunits = micrometre
     xscale = Qwt5.QwtLog10ScaleEngine
     yscale = Qwt5.QwtLog10ScaleEngine
     xmax = F_S / 2
@@ -565,7 +576,9 @@ class Viewer:
     def mouse_move(self, pos):
         x = self.plot.invTransform(Qwt5.QwtPlot.xBottom, pos.x())
         y = self.plot.invTransform(Qwt5.QwtPlot.yLeft, pos.y())
-        self.ui.position.setText('X: %8.4g Y: %8.4g' % (x, y))
+        self.ui.position.setText(
+            'X: %8.4g %s  Y: %8.4g %s' %
+            (x, self.mode.xunits, y, self.mode.yunits))
 
 
     # --------------------------------------------------------------------------
@@ -604,8 +617,10 @@ class Viewer:
 
         x = Qwt5.QwtPlot.xBottom
         y = Qwt5.QwtPlot.yLeft
-        self.p.setAxisTitle(x, self.mode.xname)
-        self.p.setAxisTitle(y, self.mode.yname)
+        self.plot.setAxisTitle(
+            x, '%s (%s)' % (self.mode.xname, self.mode.xunits))
+        self.plot.setAxisTitle(
+            y, '%s (%s)' % (self.mode.yname, self.mode.yunits))
         self.plot.setAxisScaleEngine(x, self.mode.xscale())
         self.plot.setAxisScaleEngine(y, self.mode.yscale())
         self.plot.setAxisScale(x, self.mode.xmin, self.mode.xmax)
