@@ -30,7 +30,8 @@ def count_mask(mask):
 
 
 class connection:
-    EOF = Exception()
+    class EOF(Exception):
+        pass
 
     def __init__(self, mask, server=DEFAULT_SERVER, port=DEFAULT_PORT):
         self.mask = normalise_mask(mask)
@@ -48,7 +49,7 @@ class connection:
             select.select([self.sock.fileno()], [], [])
             chunk = self.sock.recv(4096)
             if not chunk:
-                raise self.EOF
+                raise self.EOF('Connection closed by server')
             self.buffer += chunk
         result, self.buffer = self.buffer[:length], self.buffer[length:]
         return result

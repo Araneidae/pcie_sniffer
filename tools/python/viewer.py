@@ -27,34 +27,76 @@ Ui_Viewer, widget = uic.loadUiType(viewer_ui_file)
 sys.path.append(os.path.dirname(__file__))
 import falib
 
-def camonitor(on_event):
-    def read():
-        c = falib.connection([1])
-        while True:
-            on_event(c.read(2500)[:,0,0] * 1e-6)
-    cothread.Spawn(read)
+
+class buffer:
+    '''Circular buffer.'''
+    # Super lazy implementation: we always just copy the data to the bottom!
+
+    def __init__(self, buffer_size):
+        self.buffer = numpy.zeros((buffer_size, 2))
+        self.buffer_size = buffer_size
+
+    def write(self, block):
+        blen = len(block)
+        self.buffer[:-blen] = self.buffer[blen:]
+        self.buffer[-blen:] = block
+
+    def size(self):
+        return self.data_size
+
+    def read(self, size):
+        return self.buffer[-size:]
+
+    def reset(self):
+        self.buffer[:] = 0
 
 
 class monitor:
-    def __init__(self, on_event, id, size):
+    def __init__(self, on_event, on_eof, buffer_size, read_size):
         self.on_event = on_event
-        self.size = size
-        self.connection = falib.connection([id])
+        self.on_eof = on_eof
+        self.buffer = buffer(buffer_size)
+        self.read_size = read_size
+        self.running = False
+
+    def start(self):
+        assert not self.running
+        self.connection = falib.connection([self.id])
         self.running = True
-        self.task = cothread.Spawn(self.monitor)
+        self.buffer.reset()
+        self.task = cothread.Spawn(self.__monitor)
 
-    def resize(self, size):
-        self.size = size
-
-    def close(self):
+    def stop(self):
+        assert self.running
         self.running = False
         self.task.Wait()
         self.connection.close()
 
-    def monitor(self):
-        while self.running:
-            data = self.connection.read(self.size)
-            self.on_event(data[:, 0, :] * 1e-6)
+    def set_id(self, id):
+        running = self.running
+        if running:
+            self.stop()
+        self.id = id
+        if running:
+            self.start()
+
+    def resize(self, notify_size, update_size):
+        '''The notify_size is the data size delivered in each update, while
+        the update_size determines how frequently an update is delivered.'''
+        self.notify_size = notify_size
+        self.update_size = update_size
+        self.data_ready = 0
+
+    def __monitor(self):
+        try:
+            while self.running:
+                self.buffer.write(self.connection.read(self.read_size)[:,0,:])
+                self.data_ready += self.read_size
+                if self.data_ready >= self.update_size:
+                    self.on_event(self.buffer.read(self.notify_size) * 1e-6)
+                    self.data_ready -= self.update_size
+        except falib.connection.EOF:
+            self.on_eof()
 
 
 BPM_list = [
@@ -66,6 +108,8 @@ Timebase_list = [
     ('1s', 10000),      ('2.5s', 25000),    ('5s', 50000),
     ('10s', 100000),    ('25s', 250000),    ('50s', 500000)]
 
+SCROLL_THRESHOLD = 10000
+
 
 # subclass form to implement buttons
 class Viewer(widget, Ui_Viewer):
@@ -74,55 +118,47 @@ class Viewer(widget, Ui_Viewer):
         widget.__init__(self)
         self.setupUi(self)
 
-        self.monitor = None
-        self.channel.addItems(BPM_list)
-        self.timebase.addItems([l[0] for l in Timebase_list])
-        self.mode.addItems(['Raw Signal', 'FFT', 'Integrated'])
         # make any contents fill the empty frame
         grid = QtGui.QGridLayout(self.axes)
         self.axes.setLayout(grid)
         self.makeplot()
 
-    def channel_currentIndexChanged(self, ix):
-        # disconnect old channel if any
-        if self.monitor:
-            self.monitor.close()
-        # connect new channel
-        self.monitor = monitor(self.on_event, ix + 1, 1000)
+        # Prepare the selections in the controls
+        self.monitor = monitor(
+            self.on_event, self.on_eof,
+            Timebase_list[-1][1], Timebase_list[0][1])
+        self.timebase.addItems([l[0] for l in Timebase_list])
+        self.mode.addItems(['Raw Signal', 'FFT', 'Integrated'])
+        self.channel.addItems(BPM_list)
 
-    def rescale_clicked(self):
-        min = numpy.amin(self.value)
-        max = numpy.amax(self.value)
-        self.p.setAxisScale(Qwt5.QwtPlot.yLeft, 1.2*min, 1.2*max)
+        # Select initial state
+        self.monitor.set_id(1)
+        self.select_timebase(0)
+        self.monitor.start()
 
-    def timebase_currentIndexChanged(self, ix):
-        new_timebase = Timebase_list[ix][1]
-        self.p.setAxisScale(Qwt5.QwtPlot.xBottom, 0, new_timebase)
-        self.monitor.resize(new_timebase)
+        # Make the initial connections
+        self.connect(self.channel,
+            QtCore.SIGNAL('currentIndexChanged(int)'), self.select_channel)
+        self.connect(self.rescale,
+            QtCore.SIGNAL('clicked()'), self.rescale_graph)
+        self.connect(self.mode,
+            QtCore.SIGNAL('currentIndexChanged(int)'), self.select_mode)
+        self.connect(self.run,
+            QtCore.SIGNAL('clicked(bool)'), self.toggle_running)
+        self.connect(self.timebase,
+            QtCore.SIGNAL('currentIndexChanged(int)'), self.select_timebase)
 
-    def mode_currentIndexChanged(self, ix):
-        print 'new mode', ix
-
-    def run_clicked(self, running):
-        print 'running', running
-
-    def on_event(self, value):
-        '''camonitor callback'''
-        self.value = value
-        t = numpy.arange(value.shape[0])
-        self.c1.setData(t, value[:, 0])
-        self.c2.setData(t, value[:, 1])
 
     def makeplot(self):
         '''set up plotting'''
         # draw a plot in the frame
         p = Qwt5.QwtPlot(self.axes)
-        c1 = Qwt5.QwtPlotCurve('X')
-        c2 = Qwt5.QwtPlotCurve('Y')
-        c1.attach(p)
-        c1.setPen(QtGui.QPen(QtCore.Qt.blue))
-        c2.attach(p)
-        c2.setPen(QtGui.QPen(QtCore.Qt.red))
+        cx = Qwt5.QwtPlotCurve('X')
+        cy = Qwt5.QwtPlotCurve('Y')
+        cx.setPen(QtGui.QPen(QtCore.Qt.blue))
+        cy.setPen(QtGui.QPen(QtCore.Qt.red))
+        cy.attach(p)
+        cx.attach(p)
 
         # === Plot Customization ===
         # set background to black
@@ -131,20 +167,54 @@ class Viewer(widget, Ui_Viewer):
         p.canvas().setFocusIndicator(Qwt5.QwtPlotCanvas.NoFocusIndicator)
         # set fixed scale
         p.setAxisScale(Qwt5.QwtPlot.yLeft, -0.1, 0.1)
-        p.setAxisScale(Qwt5.QwtPlot.xBottom, 0, 1000)
-        # Set up manual zooming
-        z = Qwt5.QwtPlotZoomer(p.canvas())
-        z.setRubberBandPen(QtGui.QPen(QtCore.Qt.white))
-        # automatically redraw when data changes
-        p.setAutoReplot(True)
-        # reset plot zoom (the default is 1000 x 1000)
-#         for z in p.zoomers:
-#             z.setZoomBase()
 
         self.p = p
-        self.c1 = c1
-        self.c2 = c2
+        self.cx = cx
+        self.cy = cy
         self.axes.layout().addWidget(self.p)
+
+
+    # --------------------------------------------------------------------------
+    # GUI event handlers
+
+    def select_channel(self, ix):
+        self.monitor.set_id(ix + 1)
+
+    def rescale_graph(self):
+        self.p.setAxisScale(Qwt5.QwtPlot.yLeft,
+            1.2 * numpy.amin(self.value), 1.2 * numpy.amax(self.value))
+        self.p.replot()
+
+    def select_timebase(self, ix):
+        new_timebase = Timebase_list[ix][1]
+        self.p.setAxisScale(Qwt5.QwtPlot.xBottom, 0, new_timebase)
+        self.monitor.resize(new_timebase, min(new_timebase, SCROLL_THRESHOLD))
+
+    def select_mode(self, ix):
+        print 'new mode', ix
+
+    def toggle_running(self, running):
+        if running:
+            self.monitor.start()
+        else:
+            self.monitor.stop()
+
+
+    # --------------------------------------------------------------------------
+    # Data event handlers
+
+    def on_event(self, value):
+        self.value = value
+        t = numpy.arange(value.shape[0])
+        self.cx.setData(t, value[:, 0])
+        self.cy.setData(t, value[:, 1])
+        self.p.replot()
+
+    def on_eof(self):
+        print 'EOF on channel detected'
+        self.run.setCheckState(False)
+        self.monitor.stop()
+
 
 # create and show form
 s = Viewer()
