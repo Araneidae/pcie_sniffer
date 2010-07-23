@@ -36,17 +36,17 @@ int count_mask_bits(filter_mask_t mask)
 }
 
 
-int format_mask(filter_mask_t mask, char *buffer)
+int format_raw_mask(filter_mask_t mask, char *buffer)
 {
-    for (int i = sizeof(filter_mask_t) / 4; i > 0; i --)
-        buffer += sprintf(buffer, "%08x", mask[i - 1]);
-    return (sizeof(filter_mask_t) / 4) * 8;
+    for (int i = sizeof(filter_mask_t) / sizeof(uint32_t); i > 0; i --)
+        buffer += sprintf(buffer, "%08X", mask[i - 1]);
+    return (sizeof(filter_mask_t) / sizeof(uint32_t)) * 8;
 }
 
-void print_mask(FILE *out, filter_mask_t mask)
+void print_raw_mask(FILE *out, filter_mask_t mask)
 {
     char buffer[2 * sizeof(filter_mask_t) + 1];
-    fwrite(buffer, format_mask(mask, buffer), 1, out);
+    fwrite(buffer, format_raw_mask(mask, buffer), 1, out);
 }
 
 
@@ -98,6 +98,27 @@ bool parse_mask(const char *string, filter_mask_t mask)
         TEST_OK_(*string == '\0',
             "Unexpected characters at \"%s\" (+%d)",
             original, string - original);
+}
+
+
+bool parse_raw_mask(const char *string, filter_mask_t mask)
+{
+    memset(mask, 0, sizeof(filter_mask_t));
+    int count = FA_ENTRY_COUNT / 4;
+    for (int i = count - 1; i >= 0; i --)
+    {
+        char ch = *string++;
+        int nibble;
+        if ('0' <= ch  &&  ch <= '9')
+            nibble = ch - '0';
+        else if ('A' <= ch  &&  ch <= 'F')
+            nibble = ch - 'A' + 10;
+        else
+            return TEST_OK_(false,
+                "Unexpected character in mask at offset %d", count - i);
+        mask[i / 8] |= nibble << 4 * (i % 8);
+    }
+    return TEST_OK_(*string == '\0', "Unexpected characters after mask");
 }
 
 

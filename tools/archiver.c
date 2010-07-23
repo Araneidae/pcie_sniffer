@@ -151,7 +151,6 @@ static bool initialise_signals(void)
         TEST_IO(sem_init(&shutdown_semaphore, 0, 0))  &&
 
         TEST_IO(sigfillset(&do_shutdown.sa_mask))  &&
-        TEST_IO(sigfillset(&do_ignore.sa_mask))  &&
         /* Catch the usual interruption signals and use them to trigger an
          * orderly shutdown. */
         TEST_IO(sigaction(SIGHUP,  &do_shutdown, NULL))  &&

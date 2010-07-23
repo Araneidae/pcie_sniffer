@@ -27,7 +27,7 @@ CPPFLAGS += -D_FILE_OFFSET_BITS=64
 LDFLAGS += -lpthread -lrt
 
 
-BUILD = archiver read prepare
+BUILD = archiver read prepare capture
 
 archiver_SRCS += archiver.c
 archiver_SRCS += error.c
@@ -46,6 +46,11 @@ read_SRCS += disk.c
 prepare_SRCS += prepare.c
 prepare_SRCS += error.c
 prepare_SRCS += disk.c
+
+capture_SRCS += capture.c
+capture_SRCS += error.c
+capture_SRCS += mask.c
+capture_SRCS += matlab.c
 
 
 all: $(BUILD)

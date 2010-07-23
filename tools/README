@@ -1,0 +1,65 @@
+README
+    This file provides a quick overview of the files in this directory, and is
+    bound to be out of date.
+
+First the make files:
+
+makefile
+    This is the makefile invoked in response to running `make`.  This is used to
+    ensure that all of the files built by this project are built out of tree in
+    build subdirectory.
+
+Makefile
+    The main makefile, invoked with working directory set to ./build and with
+    VPATH set to .
+
+build
+    Build directory.  This can safely be deleted.
+
+
+Top level application files:
+
+archiver.c archiver.h
+    This is the main application, the FA sniffer archiver.
+
+capture.c
+    Captures a continuous stream of sniffer data to a file.
+
+prepare.c
+    Prepares a file or volume for use as an FA sniffer archive.
+
+read.c
+    Obsolescent...
+
+
+Supporting libraries:
+
+buffer.c buffer.h
+    Circular in-memory buffer supporting one writer (sniffer) and multiple
+    readers (disk_writer, socket_server).
+
+disk.c disk.h
+    Defines on disk storage.  Some of this is a relic of the obsolete facility
+    for reading archive data directly from the disk.
+
+disk_writer.c disk_writer.h
+    Write archiver data directly to disk.
+
+error.c error.h
+    Common error handling macros and assocated support functions.
+
+list.h
+    Some double link list macros and inline functions derived from the kernel.
+
+mask.c mask.h
+    Support routines for handling subsets of sniffer frames, and a sensible
+    place for other supporting routines.
+
+matlab.c matlab.h
+    Implements writing Matlab header to data stream.
+
+sniffer.c sniffer.h
+    Capture of sniffer data from the FA sniffer device.
+
+socket_server.c socket_server.h
+    Interface to FA sniffer clients.

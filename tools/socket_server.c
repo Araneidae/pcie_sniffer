@@ -72,7 +72,12 @@ static void process_read(int scon, char *buf, ssize_t rx)
 static void process_subscribe(int scon, char *buf, ssize_t rx)
 {
     filter_mask_t mask;
-    if (parse_mask(buf + 1, mask))
+    /* A subscribe request is either S<mask> or SR<raw-mask>. */
+    bool parse_ok = IF_ELSE(
+        buf[1] == 'R',
+            parse_raw_mask(buf + 2, mask),
+            parse_mask(buf + 1, mask));
+    if (parse_ok)
     {
         struct reader_state *reader = open_reader(false);
         bool ok = true;
@@ -115,6 +120,7 @@ static void * process_connection(void *context)
     int scon = (int) context;
     char buf[4096];
     ssize_t rx;
+    memset(buf, 0, sizeof(buf));
     if (TEST_IO(rx = read(scon, buf, sizeof(buf)))  &&  rx > 0)
     {
         log_message("Read: \"%.*s\"", rx, buf);
