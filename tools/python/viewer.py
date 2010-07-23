@@ -119,8 +119,10 @@ class monitor:
 
 F_S = 10072.0
 
-char_mu     = u'\u03BC'             # Greek mu Unicode character
-char_sqrt   = u'\u221A'             # Square root sign Unicode character
+# Unicode characters
+char_mu     = u'\u03BC'             # Greek mu
+char_sqrt   = u'\u221A'             # Square root sign
+char_cdot   = u'\u22C5'             # Centre dot
 
 
 class mode_common:
@@ -202,7 +204,7 @@ class mode_fft(mode_common):
     yscale = Qwt5.QwtLog10ScaleEngine
     xmin = 0
     xmax = 1e-3 * F_S / 2
-    ymin = 1e-5
+    ymin = 1e-4
     ymax = 1
 
     Decimations = [1, 10, 100]
@@ -287,12 +289,12 @@ def condense(value, counts):
 class mode_fft_logf(mode_common):
     mode_name = 'FFT (log f)'
     xname = 'Frequency (Hz)'
-    yname = 'Amplitude (%sm/%sHz)' % (char_mu, char_sqrt)
+    yname = 'Amplitude (%sm%s%sHz)' % (char_mu, char_cdot, char_sqrt)
     xscale = Qwt5.QwtLog10ScaleEngine
     yscale = Qwt5.QwtLog10ScaleEngine
     xmax = F_S / 2
-    ymin = 1e-5
-    ymax = 1
+    ymin = 1e-3
+    ymax = 100
 
     def set_timebase(self, timebase):
         self.counts = compute_gaps(timebase//2 - 1, 1000)
@@ -301,7 +303,8 @@ class mode_fft_logf(mode_common):
 
     def compute(self, value):
         fft = scaled_abs_fft(value)[1:]
-        return numpy.sqrt(condense(fft**2, self.counts) / self.counts[:,None])
+        return self.xaxis[:, None] * numpy.sqrt(
+            condense(fft**2, self.counts) / self.counts[:,None])
 
 
 class mode_integrated(mode_common):
