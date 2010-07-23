@@ -290,7 +290,7 @@ def condense(value, counts):
 class mode_fft_logf(mode_common):
     mode_name = 'FFT (log f)'
     xname = 'Frequency (Hz)'
-    yname = 'Amplitude (%sm%s%sHz)' % (char_mu, char_cdot, char_sqrt)
+    yname = 'Amplitude freq (%sm%s%sHz)' % (char_mu, char_cdot, char_sqrt)
     xscale = Qwt5.QwtLog10ScaleEngine
     yscale = Qwt5.QwtLog10ScaleEngine
     xmax = F_S / 2
@@ -346,7 +346,7 @@ class mode_integrated(mode_common):
         v = self.compute(self.parent.monitor.read())
         self.cxb.setData(self.xaxis, v[:, 0])
         self.cyb.setData(self.xaxis, v[:, 1])
-        self.parent.p.replot()
+        self.parent.plot.replot()
 
 
 Display_modes = [mode_raw, mode_fft, mode_fft_logf, mode_integrated]
@@ -412,6 +412,9 @@ class Viewer:
 
         ui.channel_id.setValidator(QtGui.QIntValidator(0, 255, ui))
 
+        ui.position = QtGui.QLabel('X:      Y:     ', ui.statusbar)
+        ui.statusbar.addPermanentWidget(ui.position)
+
         # For each possible display mode create the initial state used to manage
         # that display mode and set up the initial display mode.
         self.mode_list = [l(self) for l in Display_modes]
@@ -438,7 +441,7 @@ class Viewer:
         ui.channel.setCurrentIndex(0)
         ui.timebase.setCurrentIndex(INITIAL_TIMEBASE)
         # Go!
-        self.monitor.start()
+        self.try_start()
 
     def connect(self, control, signal, action):
         '''Connects a Qt signal from a control to the selected action.'''
@@ -450,29 +453,49 @@ class Viewer:
         if dotted:
             pen.setStyle(QtCore.Qt.DotLine)
         c.setPen(pen)
-        c.attach(self.p)
+        c.attach(self.plot)
         return c
 
     def makeplot(self):
         '''set up plotting'''
         # Draw a plot in the frame.  We do this, rather than defining the
         # QwtPlot object in Qt designer because loadUi then fails!
-        p = self.ui.plot
+        plot = self.ui.plot
 
-        self.p = p
+        self.plot = plot
         self.cx = self.makecurve(QtCore.Qt.blue)
         self.cy = self.makecurve(QtCore.Qt.red)
 
         # set background to black
-        p.setCanvasBackground(QtCore.Qt.black)
+        plot.setCanvasBackground(QtCore.Qt.black)
 
         # Enable zooming
-        z = Qwt5.QwtPlotZoomer(p.canvas())
-        z.setRubberBandPen(QtGui.QPen(QtCore.Qt.white))
-        self.z = z
+        zoom = Qwt5.QwtPlotZoomer(plot.canvas())
+        zoom.setRubberBandPen(QtGui.QPen(QtCore.Qt.white))
+        zoom.setTrackerPen(QtGui.QPen(QtCore.Qt.white))
+        # This is a poorly documented trick to disable the use of the right
+        # button for cancelling zoom, so we can use it for panning instead.  The
+        # first argument of setMousePattern() selects the zooming action, and is
+        # one of the following with the given default assignment:
+        #
+        #   Index   Button          Action
+        #   0       Left Mouse      Start and stop rubber band selection
+        #   1       Right Mouse     Restore to original unzoomed axes
+        #   2       Middle Mouse    Zoom out one level
+        #   3       Shift Left      ?
+        #   4       Shift Right     ?
+        #   5       Shift Middle    Zoom back in one level
+        zoom.setMousePattern(1, QtCore.Qt.NoButton)
+        self.zoom = zoom
 
-        # Enable spy
-        self.connect(SpyMouse(p.canvas()), 'MouseMove', self.mouse_move)
+        # Enable panning.  We reconfigure the active mouse to use the right
+        # button so that panning and zooming can coexist.
+        pan = Qwt5.QwtPlotPanner(plot.canvas())
+        pan.setMouseButton(QtCore.Qt.RightButton)
+
+        # Monitor mouse movements over the plot area so we can show the position
+        # in coordinates.
+        self.connect(SpyMouse(plot.canvas()), 'MouseMove', self.mouse_move)
 
 
 
@@ -494,17 +517,25 @@ class Viewer:
             self.ui.channel.blockSignals(False)
 
     def set_channel(self, ix):
-        self.channel = BPM_list[self.group_index][1][ix][1]
+        bpm = BPM_list[self.group_index][1][ix]
+        self.channel = bpm[1]
         self.monitor.set_id(self.channel)
+        self.ui.statusbar.showMessage(
+            'BPM: %s (id %d)' % (bpm[0], self.channel))
 
     def set_channel_id(self):
         self.channel = int(self.ui.channel_id.text())
         self.monitor.set_id(self.channel)
+        self.ui.statusbar.showMessage('BPM id %d' % self.channel)
 
     def rescale_graph(self):
         self.mode.rescale(self.monitor.read())
-        self.p.setAxisScale(Qwt5.QwtPlot.yLeft, self.mode.ymin, self.mode.ymax)
-        self.p.replot()
+        self.plot.setAxisScale(
+            Qwt5.QwtPlot.xBottom, self.mode.xmin, self.mode.xmax)
+        self.plot.setAxisScale(
+            Qwt5.QwtPlot.yLeft, self.mode.ymin, self.mode.ymax)
+        self.zoom.setZoomBase()
+        self.plot.replot()
 
     def set_timebase(self, ix):
         new_timebase = Timebase_list[ix][1]
@@ -520,7 +551,7 @@ class Viewer:
 
     def toggle_running(self, running):
         if running:
-            self.monitor.start()
+            self.try_start()
         else:
             self.monitor.stop()
 
@@ -529,13 +560,12 @@ class Viewer:
         show_y = ix in [0, 2]
         self.cx.setVisible(show_x)
         self.cy.setVisible(show_y)
-        self.p.replot()
+        self.plot.replot()
 
     def mouse_move(self, pos):
-        x = self.p.invTransform(Qwt5.QwtPlot.xBottom, pos.x())
-        y = self.p.invTransform(Qwt5.QwtPlot.yLeft, pos.y())
-        self.ui.x_position.setText('X: %.4g' % x)
-        self.ui.y_position.setText('Y: %.4g' % y)
+        x = self.plot.invTransform(Qwt5.QwtPlot.xBottom, pos.x())
+        y = self.plot.invTransform(Qwt5.QwtPlot.yLeft, pos.y())
+        self.ui.position.setText('X: %8.4g Y: %8.4g' % (x, y))
 
 
     # --------------------------------------------------------------------------
@@ -545,21 +575,29 @@ class Viewer:
         v = self.mode.compute(value)
         self.cx.setData(self.mode.xaxis, v[:, 0])
         self.cy.setData(self.mode.xaxis, v[:, 1])
-        if self.ui.autoscale.isChecked():
+        if self.ui.autoscale.isChecked() and self.zoom.zoomRectIndex() == 0:
             self.mode.rescale(value)
-            self.p.setAxisScale(
+            self.plot.setAxisScale(
                 Qwt5.QwtPlot.yLeft, self.mode.ymin, self.mode.ymax)
-        self.p.replot()
+        self.plot.replot()
 
     def on_eof(self):
-        print 'EOF on channel detected'
         self.ui.run.setCheckState(False)
         self.monitor.stop()
-        # Need to put update into status bar here
+        self.ui.statusbar.showMessage('FA server disconnected')
 
 
     # --------------------------------------------------------------------------
     # Handling
+
+    def try_start(self):
+        try:
+            self.monitor.start()
+        except Exception, message:
+            self.ui.run.setCheckState(False)
+            self.ui.statusbar.showMessage(
+                'Unable to connect to server: %s' % message)
+
 
     def reset_mode(self):
         self.mode.set_timebase(self.timebase)
@@ -568,11 +606,11 @@ class Viewer:
         y = Qwt5.QwtPlot.yLeft
         self.p.setAxisTitle(x, self.mode.xname)
         self.p.setAxisTitle(y, self.mode.yname)
-        self.p.setAxisScale(x, self.mode.xmin, self.mode.xmax)
-        self.p.setAxisScaleEngine(x, self.mode.xscale())
-        self.p.setAxisScaleEngine(y, self.mode.yscale())
-        self.p.setAxisScale(Qwt5.QwtPlot.yLeft, self.mode.ymin, self.mode.ymax)
-        self.z.setZoomBase()
+        self.plot.setAxisScaleEngine(x, self.mode.xscale())
+        self.plot.setAxisScaleEngine(y, self.mode.yscale())
+        self.plot.setAxisScale(x, self.mode.xmin, self.mode.xmax)
+        self.plot.setAxisScale(y, self.mode.ymin, self.mode.ymax)
+        self.zoom.setZoomBase()
 
         # Force a redraw right away with the data we have in hand
         self.on_data_update(self.monitor.read())
@@ -591,8 +629,8 @@ class UI(ui_form, ui_base):
 
 ui = UI()
 ui.setupUi(ui)
+
 s = Viewer(ui)
+
 ui.show()
-
-
 cothread.WaitForQuit()
