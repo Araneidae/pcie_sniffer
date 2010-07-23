@@ -95,6 +95,10 @@ class monitor:
         except falib.connection.EOF:
             self.on_eof()
 
+    def read(self):
+        '''Can be called at any time to read the most recent buffer.'''
+        return self.buffer.read(self.notify_size)
+
 
 BPM_list = [
     'SR%02dC-DI-EBPM-%02d' % (c+1, n+1)
@@ -113,14 +117,26 @@ char_mu     = u'\u03BC'             # Greek mu Unicode character
 char_sqrt   = u'\u221A'             # Mathematical square root sign
 
 
-class mode_raw:
+class modes:
+    def __init__(self):
+        pass
+
+    def rescale(self, value):
+        value = self.compute(value)
+        self.ymin = 1.2 * numpy.nanmin(value)
+        self.ymax = 1.2 * numpy.nanmax(value)
+
+
+class mode_raw(modes):
     mode_name = 'Raw Signal'
     yname = 'Position (%sm)' % char_mu
     xscale = Qwt5.QwtLinearScaleEngine
     yscale = Qwt5.QwtLinearScaleEngine
     xmin = 0
+    ymin = -10
+    ymax = 10
 
-    def __init__(self, timebase):
+    def set_timebase(self, timebase):
         if timebase <= 10000:
             self.xname = 'Time (ms)'
             scale = 1e3
@@ -134,15 +150,17 @@ class mode_raw:
         return 1e-3 * value
 
 
-class mode_fft:
+class mode_fft(modes):
     mode_name = 'FFT'
     xname = 'Frequency (kHz)'
     yname = 'Amplitude (%sm/%sHz)' % (char_mu, char_sqrt)
     xscale = Qwt5.QwtLinearScaleEngine
     yscale = Qwt5.QwtLog10ScaleEngine
     xmin = 0
+    ymin = 1e-5
+    ymax = 1
 
-    def __init__(self, timebase):
+    def set_timebase(self, timebase):
         self.xmax = 1e-3 * F_S / 2
         N2 = timebase // 2
         self.xaxis = self.xmax * numpy.arange(N2) / N2
@@ -153,12 +171,12 @@ class mode_fft:
         return numpy.abs(fft) * numpy.sqrt(2.0 / (F_S * N))
 
 class mode_fft_logt(mode_fft):
-    mode_name = 'FFT (log t)'
+    mode_name = 'FFT (log f)'
     xname = 'Frequency (Hz)'
     xscale = Qwt5.QwtLog10ScaleEngine
 
-    def __init__(self, timebase):
-        mode_fft.__init__(self, timebase)
+    def set_timebase(self, timebase):
+        mode_fft.set_timebase(self, timebase)
         self.xaxis = 1e3 * self.xaxis[1:]
         self.xmin = self.xaxis[0]
         self.xmax = self.xaxis[-1]
@@ -167,14 +185,16 @@ class mode_fft_logt(mode_fft):
         return mode_fft.compute(self, value)[1:]
 
 
-class mode_integrated:
+class mode_integrated(modes):
     mode_name = 'Integrated'
     xname = 'Frequency (Hz)'
     yname = 'Cumulative amplitude (%sm)' % char_mu
     xscale = Qwt5.QwtLog10ScaleEngine
     yscale = Qwt5.QwtLog10ScaleEngine
+    ymin = 0.01
+    ymax = 10
 
-    def __init__(self, timebase):
+    def set_timebase(self, timebase):
         self.len = timebase / 2
         self.xmax = 0.5 * F_S
         self.xaxis = self.xmax * numpy.arange(self.len)[1:] / self.len
@@ -200,18 +220,23 @@ class Viewer:
         ui.axes.setLayout(grid)
         self.makeplot()
 
-        self.monitor = monitor(self.on_event, self.on_eof, 500000, 1000)
+        self.monitor = monitor(self.on_data_update, self.on_eof, 500000, 1000)
 
         # Prepare the selections in the controls
         ui.timebase.addItems([l[0] for l in Timebase_list])
         ui.mode.addItems([l.mode_name for l in Display_modes])
         ui.channel.addItems(BPM_list)
 
-        # Select initial state
+        # For each possible display mode create the initial state used to manage
+        # that display mode.
+        self.mode_list = [l() for l in Display_modes]
+
+        # Select initial state.  This consists of a a choice of channel, a
+        # choice of mode and a choice of timebase.
         self.monitor.set_id(1)
-        self.current_timebase = Timebase_list[0][1]
-        self.mode_class = Display_modes[0]
-        self.reset_mode()
+        self.mode = self.mode_list[0]
+        self.ui.timebase.setCurrentIndex(3)
+        self.select_timebase(3)
         self.monitor.start()
 
         # Make the initial connections
@@ -234,8 +259,8 @@ class Viewer:
         cy = Qwt5.QwtPlotCurve('Y')
         cx.setPen(QtGui.QPen(QtCore.Qt.blue))
         cy.setPen(QtGui.QPen(QtCore.Qt.red))
-        cy.attach(p)
         cx.attach(p)
+        cy.attach(p)
 
         # === Plot Customization ===
         # set background to black
@@ -258,18 +283,18 @@ class Viewer:
         self.monitor.set_id(ix + 1)
 
     def rescale_graph(self):
-        self.p.setAxisScale(Qwt5.QwtPlot.yLeft,
-            1.2 * numpy.nanmin(self.value), 1.2 * numpy.nanmax(self.value))
+        self.mode.rescale(self.monitor.read())
+        self.p.setAxisScale(Qwt5.QwtPlot.yLeft, self.mode.ymin, self.mode.ymax)
         self.p.replot()
 
     def select_timebase(self, ix):
         new_timebase = Timebase_list[ix][1]
-        self.current_timebase = new_timebase
+        self.timebase = new_timebase
         self.monitor.resize(new_timebase, min(new_timebase, SCROLL_THRESHOLD))
         self.reset_mode()
 
     def select_mode(self, ix):
-        self.mode_class = Display_modes[ix]
+        self.mode = self.mode_list[ix]
         self.reset_mode()
 
     def toggle_running(self, running):
@@ -283,23 +308,28 @@ class Viewer:
     # Data event handlers
 
     def reset_mode(self):
-        mode = self.mode_class(self.current_timebase)
-        self.compute = mode.compute
-        self.xaxis = mode.xaxis
+        self.mode.set_timebase(self.timebase)
 
         x = Qwt5.QwtPlot.xBottom
         y = Qwt5.QwtPlot.yLeft
-        self.p.setAxisTitle(x, mode.xname)
-        self.p.setAxisTitle(y, mode.yname)
-        self.p.setAxisScale(x, mode.xmin, mode.xmax)
-        self.p.setAxisScaleEngine(x, mode.xscale())
-        self.p.setAxisScaleEngine(y, mode.yscale())
+        self.p.setAxisTitle(x, self.mode.xname)
+        self.p.setAxisTitle(y, self.mode.yname)
+        self.p.setAxisScale(x, self.mode.xmin, self.mode.xmax)
+        self.p.setAxisScaleEngine(x, self.mode.xscale())
+        self.p.setAxisScaleEngine(y, self.mode.yscale())
+        self.p.setAxisScale(Qwt5.QwtPlot.yLeft, self.mode.ymin, self.mode.ymax)
 
-    def on_event(self, value):
-        v = self.compute(value)
-        self.value = v
-        self.cx.setData(self.xaxis, v[:, 0])
-        self.cy.setData(self.xaxis, v[:, 1])
+        # Force a redraw right away with the data we have in hand
+        self.on_data_update(self.monitor.read())
+
+    def on_data_update(self, value):
+        v = self.mode.compute(value)
+        self.cx.setData(self.mode.xaxis, v[:, 0])
+        self.cy.setData(self.mode.xaxis, v[:, 1])
+        if self.ui.autoscale.isChecked():
+            self.mode.rescale(v)
+            self.p.setAxisScale(
+                Qwt5.QwtPlot.yLeft, self.mode.ymin, self.mode.ymax)
         self.p.replot()
 
     def on_eof(self):
