@@ -1,3 +1,4 @@
 /kbuild-*
 /*.html
 /tools/build
+*.pyc

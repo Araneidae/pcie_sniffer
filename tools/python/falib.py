@@ -58,6 +58,9 @@ class connection:
         array = numpy.frombuffer(raw, dtype = numpy.int32)
         return array.reshape((samples, self.count, 2))
 
+    def close(self):
+        self.sock.close()
+
 
 if __name__ == '__main__':
     from pkg_resources import require
