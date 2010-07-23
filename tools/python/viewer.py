@@ -171,16 +171,16 @@ class mode_raw(mode_common):
         return 1e-3 * value
 
 
-def scaled_fft(value, axis=0):
+def scaled_abs_fft(value, axis=0):
     '''Returns the fft of value (along axis 0) scaled so that values are in
     units per sqrt(Hz).  The magnitude of the first half of the spectrum is
     returned.'''
-    N = value.shape[axis]
     fft = numpy.fft.fft(1e-3 * value, axis=axis)
 
     # This trickery below is simply implementing fft[:N//2] where the slicing is
     # along the specified axis rather than axis 0.  It does seem a bit
     # complicated...
+    N = value.shape[axis]
     slice = [numpy.s_[:] for s in fft.shape]
     slice[axis] = numpy.s_[:N//2]
     fft = fft[slice]
@@ -248,14 +248,40 @@ class mode_fft(mode_common):
 
     def compute(self, value):
         if self.decimation == 1:
-            return scaled_fft(value)
+            return scaled_abs_fft(value)
         else:
             # Compute a decimated fft by segmenting the waveform (by reshaping),
             # computing the fft of each segment, and computing the mean power of
             # all the resulting transforms.
             N = len(value)
             value = value.reshape((self.decimation, N//self.decimation, 2))
-            return numpy.sqrt(numpy.mean(scaled_fft(value, axis=1)**2, axis=0))
+            fft = scaled_abs_fft(value, axis=1)
+            return numpy.sqrt(numpy.mean(fft**2, axis=0))
+
+
+def compute_gaps(l, N):
+    '''This computes a series of logarithmically spaced indexes into an array
+    of length l.  N is a hint for the number of indexes, but the result may
+    be somewhat shorter.'''
+    gaps = numpy.int_(numpy.logspace(0, numpy.log10(l), N))
+    counts = numpy.diff(gaps)
+    return counts[counts > 0]
+
+def condense(value, counts):
+    '''The given waveform is condensed in logarithmic intervals so that the same
+    number of points are generated in each decade.  The accumulation and number
+    of accumulated points are returned as separate waveforms.'''
+
+    # The result is the same shape as the value in all axes except the first.
+    shape = list(value.shape)
+    shape[0] = len(counts)
+    sums = numpy.empty(shape)
+
+    left = 0
+    for i, step in enumerate(counts):
+        sums[i] = numpy.sum(value[left:left + step], axis=0)
+        left += step
+    return sums
 
 
 class mode_fft_logf(mode_common):
@@ -269,11 +295,13 @@ class mode_fft_logf(mode_common):
     ymax = 1
 
     def set_timebase(self, timebase):
-        self.xaxis = fft_timebase(timebase)[1:]
+        self.counts = compute_gaps(timebase//2 - 1, 1000)
+        self.xaxis = F_S * numpy.cumsum(self.counts) / timebase
         self.xmin = self.xaxis[0]
 
     def compute(self, value):
-        return scaled_fft(value)[1:]
+        fft = scaled_abs_fft(value)[1:]
+        return numpy.sqrt(condense(fft**2, self.counts) / self.counts[:,None])
 
 
 class mode_integrated(mode_common):
@@ -287,13 +315,14 @@ class mode_integrated(mode_common):
     ymax = 10
 
     def set_timebase(self, timebase):
-        self.xaxis = fft_timebase(timebase)[1:]
+        self.counts = compute_gaps(timebase//2 - 1, 5000)
+        self.xaxis = F_S * numpy.cumsum(self.counts) / timebase
         self.xmin = self.xaxis[0]
 
     def compute(self, value):
         N = len(value)
-        fft = scaled_fft(value)[1:]
-        return numpy.sqrt(F_S / N * numpy.cumsum(numpy.abs(fft**2), axis=0))
+        fft2 = condense(scaled_abs_fft(value)[1:]**2, self.counts)
+        return numpy.sqrt(F_S / N * numpy.cumsum(fft2, axis=0))
 
     def __init__(self, parent):
         self.parent = parent
