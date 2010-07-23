@@ -38,9 +38,9 @@ int count_mask_bits(filter_mask_t mask)
 
 int format_raw_mask(filter_mask_t mask, char *buffer)
 {
-    for (int i = sizeof(filter_mask_t) / sizeof(uint32_t); i > 0; i --)
-        buffer += sprintf(buffer, "%08X", mask[i - 1]);
-    return (sizeof(filter_mask_t) / sizeof(uint32_t)) * 8;
+    for (int i = sizeof(filter_mask_t); i > 0; i --)
+        buffer += sprintf(buffer, "%02X", ((char *) mask)[i - 1]);
+    return 2 * sizeof(filter_mask_t);
 }
 
 void print_raw_mask(FILE *out, filter_mask_t mask)
