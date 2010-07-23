@@ -42,6 +42,7 @@ read_SRCS += read.c
 read_SRCS += error.c
 read_SRCS += mask.c
 read_SRCS += disk.c
+read_SRCS += matlab.c
 
 prepare_SRCS += prepare.c
 prepare_SRCS += error.c
