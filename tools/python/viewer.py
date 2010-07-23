@@ -2,25 +2,33 @@
 
 '''Form Example with Monitor'''
 
-import os, sys
-
 from pkg_resources import require
 require('cothread')
+
+import os, sys
+
 import cothread
 
-# Nasty hack.  Need to integrate this into cothread at some point.
+import numpy
+from PyQt4 import Qwt5, QtGui, QtCore, uic
+
+# Nasty hack.  Need to integrate this into cothread at some point, probably
+# better to make falib cothread aware
 import select
 select.select = cothread.select
 
 sys.path.append(os.path.dirname(__file__))
 import falib
 
-import numpy
-from PyQt4 import Qwt5, QtGui, QtCore, uic
 
 
-cothread.iqt()
+# ------------------------------------------------------------------------------
+#   Data Acquisition
 
+# A stream of data for one selected BPM is acquired by connecting to the FA
+# sniffer server.  This is maintained in a "circular" buffer containing the last
+# 50 seconds worth of data (500,000 points) and delivered on demand to the
+# display layer.
 
 class buffer:
     '''Circular buffer.'''
@@ -100,34 +108,45 @@ class monitor:
         return self.buffer.read(self.notify_size)
 
 
-BPM_list = [
-    'SR%02dC-DI-EBPM-%02d' % (c+1, n+1)
-    for c in range(24) for n in range(7)]
 
-Timebase_list = [
-    ('100ms', 1000),    ('250ms', 2500),    ('0.5s', 5000),
-    ('1s', 10000),      ('2.5s', 25000),    ('5s', 50000),
-    ('10s', 100000),    ('25s', 250000),    ('50s', 500000)]
+# ------------------------------------------------------------------------------
+#   Mode Specific Functionality
 
-SCROLL_THRESHOLD = 10000
+# Three basic display modes are supported: raw data, FFT of data and integrated
+# displacement (derived from the FFT).  These modes and their user support
+# functionality are implemented by the classes below, one for each display mode.
 
-F_S = 10072
+
+F_S = 10072.0
 
 char_mu     = u'\u03BC'             # Greek mu Unicode character
-char_sqrt   = u'\u221A'             # Mathematical square root sign
+char_sqrt   = u'\u221A'             # Square root sign Unicode character
 
 
-class modes:
-    def __init__(self):
+class mode_common:
+    def __init__(self, parent):
         pass
 
-    def rescale(self, value):
+    def set_enable(self, enabled):
+        pass
+
+    def get_minmax(self, value):
         value = self.compute(value)
-        self.ymin = 1.2 * numpy.nanmin(value)
-        self.ymax = 1.2 * numpy.nanmax(value)
+        return numpy.nanmin(value), numpy.nanmax(value)
+
+    def linear_rescale(self, value):
+        min, max = self.get_minmax(value)
+        margin = 0.2 * (max - min)
+        self.ymin = min - margin
+        self.ymax = max + margin
+
+    def log_rescale(self, value):
+        self.ymin, self.ymax = self.get_minmax(value)
+
+    rescale = log_rescale           # Most common default
 
 
-class mode_raw(modes):
+class mode_raw(mode_common):
     mode_name = 'Raw Signal'
     yname = 'Position (%sm)' % char_mu
     xscale = Qwt5.QwtLinearScaleEngine
@@ -135,6 +154,8 @@ class mode_raw(modes):
     xmin = 0
     ymin = -10
     ymax = 10
+
+    rescale = mode_common.linear_rescale
 
     def set_timebase(self, timebase):
         if timebase <= 10000:
@@ -150,64 +171,191 @@ class mode_raw(modes):
         return 1e-3 * value
 
 
-class mode_fft(modes):
+def scaled_fft(value, axis=0):
+    '''Returns the fft of value (along axis 0) scaled so that values are in
+    units per sqrt(Hz).  The magnitude of the first half of the spectrum is
+    returned.'''
+    N = value.shape[axis]
+    fft = numpy.fft.fft(1e-3 * value, axis=axis)
+
+    # This trickery below is simply implementing fft[:N//2] where the slicing is
+    # along the specified axis rather than axis 0.  It does seem a bit
+    # complicated...
+    slice = [numpy.s_[:] for s in fft.shape]
+    slice[axis] = numpy.s_[:N//2]
+    fft = fft[slice]
+
+    # Finally scale the result into units per sqrt(Hz)
+    return numpy.abs(fft) * numpy.sqrt(2.0 / (F_S * N))
+
+def fft_timebase(timebase, scale=1.0):
+    '''Returns a waveform suitable for an FFT timebase with the given number of
+    points.'''
+    return scale * F_S * numpy.arange(timebase // 2) / timebase
+
+
+class mode_fft(mode_common):
     mode_name = 'FFT'
     xname = 'Frequency (kHz)'
     yname = 'Amplitude (%sm/%sHz)' % (char_mu, char_sqrt)
     xscale = Qwt5.QwtLinearScaleEngine
     yscale = Qwt5.QwtLog10ScaleEngine
     xmin = 0
+    xmax = 1e-3 * F_S / 2
+    ymin = 1e-5
+    ymax = 1
+
+    Decimations = [1, 10, 100]
+
+    def __init__(self, parent):
+        # Create the GUI components for managing the decimation selection
+        self.parent = parent
+        self.label = QtGui.QLabel('Decimation', parent.ui)
+        self.selector = QtGui.QComboBox(parent.ui)
+        parent.ui.mode_action.addWidget(self.label)
+        parent.ui.mode_action.addWidget(self.selector)
+        parent.connect(self.selector,
+            'currentIndexChanged(int)', self.set_decimation)
+        self.set_enable(False)
+        # Decimation setting control
+        self.decimation = 1
+        self.setting = False
+
+    def set_timebase(self, timebase):
+        self.xaxis = fft_timebase(timebase, 1e-3)
+
+        # Manage the set of available decimations
+        self.timebase = timebase
+        self.setting = True
+        self.selector.clear()
+        valid_items = [n for n in self.Decimations if 1000 * n <= timebase]
+        self.selector.addItems(['%d:1' % n for n in valid_items])
+        self.setting = False
+        # Restore the current selection, as far as possible.
+        if self.decimation not in valid_items:
+            self.decimation = valid_items[-1]
+        self.selector.setCurrentIndex(valid_items.index(self.decimation))
+
+    def set_enable(self, enabled):
+        # Simply show or hide the decimation GUI
+        self.label.setVisible(enabled)
+        self.selector.setVisible(enabled)
+
+    def set_decimation(self, ix):
+        if not self.setting:
+            self.decimation = self.Decimations[ix]
+            self.xaxis = fft_timebase(self.timebase // self.decimation, 1e-3)
+
+    def compute(self, value):
+        if self.decimation == 1:
+            return scaled_fft(value)
+        else:
+            # Compute a decimated fft by segmenting the waveform (by reshaping),
+            # computing the fft of each segment, and computing the mean power of
+            # all the resulting transforms.
+            N = len(value)
+            value = value.reshape((self.decimation, N//self.decimation, 2))
+            return numpy.sqrt(numpy.mean(scaled_fft(value, axis=1)**2, axis=0))
+
+
+class mode_fft_logf(mode_common):
+    mode_name = 'FFT (log f)'
+    xname = 'Frequency (Hz)'
+    yname = 'Amplitude (%sm/%sHz)' % (char_mu, char_sqrt)
+    xscale = Qwt5.QwtLog10ScaleEngine
+    yscale = Qwt5.QwtLog10ScaleEngine
+    xmax = F_S / 2
     ymin = 1e-5
     ymax = 1
 
     def set_timebase(self, timebase):
-        self.xmax = 1e-3 * F_S / 2
-        N2 = timebase // 2
-        self.xaxis = self.xmax * numpy.arange(N2) / N2
-
-    def compute(self, value):
-        N = len(value)
-        fft = numpy.fft.fft(1e-3 * value, axis=0)[:N//2]
-        return numpy.abs(fft) * numpy.sqrt(2.0 / (F_S * N))
-
-class mode_fft_logt(mode_fft):
-    mode_name = 'FFT (log f)'
-    xname = 'Frequency (Hz)'
-    xscale = Qwt5.QwtLog10ScaleEngine
-
-    def set_timebase(self, timebase):
-        mode_fft.set_timebase(self, timebase)
-        self.xaxis = 1e3 * self.xaxis[1:]
+        self.xaxis = fft_timebase(timebase)[1:]
         self.xmin = self.xaxis[0]
-        self.xmax = self.xaxis[-1]
 
     def compute(self, value):
-        return mode_fft.compute(self, value)[1:]
+        return scaled_fft(value)[1:]
 
 
-class mode_integrated(modes):
+class mode_integrated(mode_common):
     mode_name = 'Integrated'
     xname = 'Frequency (Hz)'
     yname = 'Cumulative amplitude (%sm)' % char_mu
     xscale = Qwt5.QwtLog10ScaleEngine
     yscale = Qwt5.QwtLog10ScaleEngine
-    ymin = 0.01
+    xmax = F_S / 2
+    ymin = 1e-3
     ymax = 10
 
     def set_timebase(self, timebase):
-        self.len = timebase / 2
-        self.xmax = 0.5 * F_S
-        self.xaxis = self.xmax * numpy.arange(self.len)[1:] / self.len
+        self.xaxis = fft_timebase(timebase)[1:]
         self.xmin = self.xaxis[0]
 
     def compute(self, value):
         N = len(value)
-        fft = numpy.fft.fft(1e-3 * value, axis=0)[1 : N//2]
-        return numpy.sqrt(2 * numpy.cumsum(numpy.abs(fft**2), axis=0)) / N
+        fft = scaled_fft(value)[1:]
+        return numpy.sqrt(F_S / N * numpy.cumsum(numpy.abs(fft**2), axis=0))
+
+    def __init__(self, parent):
+        self.parent = parent
+        self.button = QtGui.QPushButton('Background', parent.ui)
+        parent.ui.mode_action.addWidget(self.button)
+        parent.connect(self.button, 'clicked()', self.set_background)
+        self.cxb = parent.makecurve(QtCore.Qt.blue, True)
+        self.cyb = parent.makecurve(QtCore.Qt.red,  True)
+        self.set_enable(False)
+
+    def set_enable(self, enabled):
+        self.button.setVisible(enabled)
+        self.cxb.setVisible(enabled)
+        self.cyb.setVisible(enabled)
+
+    def set_background(self):
+        v = self.compute(self.parent.monitor.read())
+        self.cxb.setData(self.xaxis, v[:, 0])
+        self.cyb.setData(self.xaxis, v[:, 1])
+        self.parent.p.replot()
 
 
+Display_modes = [mode_raw, mode_fft, mode_fft_logf, mode_integrated]
 
-Display_modes = [mode_raw, mode_fft, mode_fft_logt, mode_integrated]
+# Start up in raw display mode
+INITIAL_MODE = 0
+
+
+# ------------------------------------------------------------------------------
+#   FA Sniffer Viewer
+
+# This is the implementation of the viewer as a Qt display application.
+
+
+BPM_list = [
+    'SR%02dC-DI-EBPM-%02d' % (c+1, n+1)
+    for c in range(24) for n in range(7)]
+
+# Start on BPM #1 -- as sensible a default as any
+INITIAL_BPM = 0
+
+
+Timebase_list = [
+    ('100ms', 1000),    ('250ms', 2500),    ('0.5s',  5000),
+    ('1s',   10000),    ('2.5s', 25000),    ('5s',   50000),
+    ('10s', 100000),    ('25s', 250000),    ('50s', 500000)]
+
+# Start up with 1 second window
+INITIAL_TIMEBASE = 3
+
+SCROLL_THRESHOLD = 10000
+
+class SpyMouse(QtCore.QObject):
+    def __init__(self, parent):
+        QtCore.QObject.__init__(self, parent)
+        parent.setMouseTracking(True)
+        parent.installEventFilter(self)
+
+    def eventFilter(self, object, event):
+        if event.type() == QtCore.QEvent.MouseMove:
+            self.emit(QtCore.SIGNAL('MouseMove'), event.pos())
+        return QtCore.QObject.eventFilter(self, object, event)
 
 
 class Viewer:
@@ -226,20 +374,27 @@ class Viewer:
         ui.timebase.addItems([l[0] for l in Timebase_list])
         ui.mode.addItems([l.mode_name for l in Display_modes])
         ui.channel.addItems(BPM_list)
+        ui.show_curves.addItems(['Show X&Y', 'Show X', 'Show Y'])
 
         # For each possible display mode create the initial state used to manage
         # that display mode.
-        self.mode_list = [l() for l in Display_modes]
+        self.mode_list = [l(self) for l in Display_modes]
 
-        # Select initial state.  This consists of a a choice of channel, a
-        # choice of mode and a choice of timebase.
-        self.monitor.set_id(1)
-        self.mode = self.mode_list[0]
-        self.ui.timebase.setCurrentIndex(3)
-        self.select_timebase(3)
+        # Select initial state:
+        #   Initial BPM selection
+        self.ui.channel.setCurrentIndex(INITIAL_BPM)
+        self.monitor.set_id(INITIAL_BPM+1)
+        #   Initial display mode
+        self.ui.mode.setCurrentIndex(INITIAL_MODE)
+        self.mode = self.mode_list[INITIAL_MODE]
+        self.mode.set_enable(True)
+        #   Initial timebase
+        self.ui.timebase.setCurrentIndex(INITIAL_TIMEBASE)
+        self.select_timebase(INITIAL_TIMEBASE)
+        # Go!
         self.monitor.start()
 
-        # Make the initial connections
+        # Make the initial GUI connections
         self.connect(ui.channel,
             'currentIndexChanged(int)', self.select_channel)
         self.connect(ui.timebase,
@@ -247,33 +402,44 @@ class Viewer:
         self.connect(ui.rescale, 'clicked()', self.rescale_graph)
         self.connect(ui.mode, 'currentIndexChanged(int)', self.select_mode)
         self.connect(ui.run, 'clicked(bool)', self.toggle_running)
+        self.connect(ui.show_curves,
+            'currentIndexChanged(int)', self.show_curves)
 
     def connect(self, control, signal, action):
+        '''Connects a Qt signal from a control to the selected action.'''
         self.ui.connect(control, QtCore.SIGNAL(signal), action)
+
+    def makecurve(self, colour, dotted=False):
+        c = Qwt5.QwtPlotCurve()
+        pen = QtGui.QPen(colour)
+        if dotted:
+            pen.setStyle(QtCore.Qt.DotLine)
+        c.setPen(pen)
+        c.attach(self.p)
+        return c
 
     def makeplot(self):
         '''set up plotting'''
-        # draw a plot in the frame
+        # Draw a plot in the frame.  We do this, rather than defining the
+        # QwtPlot object in Qt designer because loadUi then fails!
         p = Qwt5.QwtPlot(self.ui.axes)
-        cx = Qwt5.QwtPlotCurve('X')
-        cy = Qwt5.QwtPlotCurve('Y')
-        cx.setPen(QtGui.QPen(QtCore.Qt.blue))
-        cy.setPen(QtGui.QPen(QtCore.Qt.red))
-        cx.attach(p)
-        cy.attach(p)
-
-        # === Plot Customization ===
-        # set background to black
-        p.setCanvasBackground(QtCore.Qt.black)
-        # stop flickering border
-        p.canvas().setFocusIndicator(Qwt5.QwtPlotCanvas.NoFocusIndicator)
-        # set fixed scale
-        p.setAxisScale(Qwt5.QwtPlot.yLeft, -0.1, 0.1)
+        self.ui.axes.layout().addWidget(p)
 
         self.p = p
-        self.cx = cx
-        self.cy = cy
-        self.ui.axes.layout().addWidget(p)
+        self.cx = self.makecurve(QtCore.Qt.blue)
+        self.cy = self.makecurve(QtCore.Qt.red)
+
+        # set background to black
+        p.setCanvasBackground(QtCore.Qt.black)
+
+        # Enable zooming
+        z = Qwt5.QwtPlotZoomer(p.canvas())
+        z.setRubberBandPen(QtGui.QPen(QtCore.Qt.white))
+        self.z = z
+
+        # Enable spy
+        self.connect(SpyMouse(p.canvas()), 'MouseMove', self.mouse_move)
+
 
 
     # --------------------------------------------------------------------------
@@ -294,7 +460,9 @@ class Viewer:
         self.reset_mode()
 
     def select_mode(self, ix):
+        self.mode.set_enable(False)
         self.mode = self.mode_list[ix]
+        self.mode.set_enable(True)
         self.reset_mode()
 
     def toggle_running(self, running):
@@ -303,9 +471,42 @@ class Viewer:
         else:
             self.monitor.stop()
 
+    def show_curves(self, ix):
+        show_x = ix in [0, 1]
+        show_y = ix in [0, 2]
+        self.cx.setVisible(show_x)
+        self.cy.setVisible(show_y)
+        self.p.replot()
+
+    def mouse_move(self, pos):
+        x = self.p.invTransform(Qwt5.QwtPlot.xBottom, pos.x())
+        y = self.p.invTransform(Qwt5.QwtPlot.yLeft, pos.y())
+        self.ui.x_position.setText('X: %.4g' % x)
+        self.ui.y_position.setText('Y: %.4g' % y)
+
 
     # --------------------------------------------------------------------------
     # Data event handlers
+
+    def on_data_update(self, value):
+        v = self.mode.compute(value)
+        self.cx.setData(self.mode.xaxis, v[:, 0])
+        self.cy.setData(self.mode.xaxis, v[:, 1])
+        if self.ui.autoscale.isChecked():
+            self.mode.rescale(value)
+            self.p.setAxisScale(
+                Qwt5.QwtPlot.yLeft, self.mode.ymin, self.mode.ymax)
+        self.p.replot()
+
+    def on_eof(self):
+        print 'EOF on channel detected'
+        self.ui.run.setCheckState(False)
+        self.monitor.stop()
+        # Need to put update into status bar here
+
+
+    # --------------------------------------------------------------------------
+    # Handling
 
     def reset_mode(self):
         self.mode.set_timebase(self.timebase)
@@ -318,25 +519,13 @@ class Viewer:
         self.p.setAxisScaleEngine(x, self.mode.xscale())
         self.p.setAxisScaleEngine(y, self.mode.yscale())
         self.p.setAxisScale(Qwt5.QwtPlot.yLeft, self.mode.ymin, self.mode.ymax)
+        self.z.setZoomBase()
 
         # Force a redraw right away with the data we have in hand
         self.on_data_update(self.monitor.read())
 
-    def on_data_update(self, value):
-        v = self.mode.compute(value)
-        self.cx.setData(self.mode.xaxis, v[:, 0])
-        self.cy.setData(self.mode.xaxis, v[:, 1])
-        if self.ui.autoscale.isChecked():
-            self.mode.rescale(v)
-            self.p.setAxisScale(
-                Qwt5.QwtPlot.yLeft, self.mode.ymin, self.mode.ymax)
-        self.p.replot()
 
-    def on_eof(self):
-        print 'EOF on channel detected'
-        self.ui.run.setCheckState(False)
-        self.monitor.stop()
-
+cothread.iqt()
 
 # create and show form
 ui_viewer = uic.loadUi(os.path.join(os.path.dirname(__file__), 'viewer.ui'))
