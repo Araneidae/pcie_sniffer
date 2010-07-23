@@ -12,20 +12,14 @@ import cothread
 import select
 select.select = cothread.select
 
+sys.path.append(os.path.dirname(__file__))
+import falib
 
-# from numpy import *
 import numpy
 from PyQt4 import Qwt5, QtGui, QtCore, uic
 
+
 cothread.iqt()
-
-# Qt designer form class (widget is actually QtGui.QWidget)
-viewer_ui_file = os.path.join(os.path.dirname(__file__), 'viewer.ui')
-Ui_Viewer, widget = uic.loadUiType(viewer_ui_file)
-
-
-sys.path.append(os.path.dirname(__file__))
-import falib
 
 
 class buffer:
@@ -57,6 +51,9 @@ class monitor:
         self.on_eof = on_eof
         self.buffer = buffer(buffer_size)
         self.read_size = read_size
+        self.update_size = read_size
+        self.notify_size = read_size
+        self.data_ready = 0
         self.running = False
 
     def start(self):
@@ -93,7 +90,7 @@ class monitor:
                 self.buffer.write(self.connection.read(self.read_size)[:,0,:])
                 self.data_ready += self.read_size
                 if self.data_ready >= self.update_size:
-                    self.on_event(self.buffer.read(self.notify_size) * 1e-6)
+                    self.on_event(self.buffer.read(self.notify_size))
                     self.data_ready -= self.update_size
         except falib.connection.EOF:
             self.on_eof()
@@ -111,48 +108,111 @@ Timebase_list = [
 SCROLL_THRESHOLD = 10000
 
 
-# subclass form to implement buttons
-class Viewer(widget, Ui_Viewer):
+
+class mode_raw:
+    mode_name = 'Raw Signal'
+    yname = 'Position (um)'
+    xscale = Qwt5.QwtLinearScaleEngine
+    yscale = Qwt5.QwtLinearScaleEngine
+    xmin = 0
+
+    def __init__(self, timebase):
+        if timebase <= 10000:
+            self.xname = 'Time (ms)'
+            scale = 1e3
+        else:
+            self.xname = 'Time (s)'
+            scale = 1.0
+        self.xmax = scale / 10072 * timebase
+        self.xaxis = scale / 10072 * numpy.arange(timebase)
+
+    def compute(self, value):
+        return 1e-3 * value
+
+
+class mode_fft:
+    mode_name = 'FFT'
+    xname = 'Frequency (kHz)'
+    yname = 'Amplitude (???)'
+    xscale = Qwt5.QwtLinearScaleEngine
+    yscale = Qwt5.QwtLog10ScaleEngine
+    xmin = 0
+
+    def __init__(self, timebase):
+        self.len = timebase / 2
+        self.xmax = 1e-3 * 10072 / 2
+        self.xaxis = self.xmax * numpy.arange(self.len) / self.len
+
+    def compute(self, value):
+        fft = numpy.abs(numpy.fft.fft(value, axis=0))
+        return fft[:self.len]
+
+
+class mode_integrated:
+    mode_name = 'Integrated'
+    xname = 'Frequency (kHz)'
+    yname = 'Amplitude (???)'
+    xscale = Qwt5.QwtLog10ScaleEngine
+    yscale = Qwt5.QwtLog10ScaleEngine
+
+    def __init__(self, timebase):
+        self.len = timebase / 2
+        self.xmax = 1e-3 * 10072 / 2
+        self.xaxis = self.xmax * numpy.arange(self.len)[1:] / self.len
+        self.xmin = self.xaxis[0]
+
+    def compute(self, value):
+        fft = numpy.abs(numpy.fft.fft(value, axis=0))
+        return numpy.cumsum(fft[1:self.len] ** 2, axis=0)
+
+
+
+Display_modes = [mode_raw, mode_fft, mode_integrated]
+
+
+class Viewer:
     '''application class'''
-    def __init__(self):
-        widget.__init__(self)
-        self.setupUi(self)
+    def __init__(self, ui):
+        self.ui = ui
 
         # make any contents fill the empty frame
-        grid = QtGui.QGridLayout(self.axes)
-        self.axes.setLayout(grid)
+        grid = QtGui.QGridLayout(ui.axes)
+        ui.axes.setLayout(grid)
         self.makeplot()
 
+        self.monitor = monitor(self.on_event, self.on_eof, 500000, 1000)
+
         # Prepare the selections in the controls
-        self.monitor = monitor(
-            self.on_event, self.on_eof,
-            Timebase_list[-1][1], Timebase_list[0][1])
-        self.timebase.addItems([l[0] for l in Timebase_list])
-        self.mode.addItems(['Raw Signal', 'FFT', 'Integrated'])
-        self.channel.addItems(BPM_list)
+        ui.timebase.addItems([l[0] for l in Timebase_list])
+        ui.mode.addItems([l.mode_name for l in Display_modes])
+        ui.channel.addItems(BPM_list)
 
         # Select initial state
         self.monitor.set_id(1)
-        self.select_timebase(0)
+        self.current_timebase = Timebase_list[0][1]
+        self.mode_class = Display_modes[0]
+        self.reset_mode()
         self.monitor.start()
 
         # Make the initial connections
-        self.connect(self.channel,
-            QtCore.SIGNAL('currentIndexChanged(int)'), self.select_channel)
-        self.connect(self.rescale,
-            QtCore.SIGNAL('clicked()'), self.rescale_graph)
-        self.connect(self.mode,
-            QtCore.SIGNAL('currentIndexChanged(int)'), self.select_mode)
-        self.connect(self.run,
-            QtCore.SIGNAL('clicked(bool)'), self.toggle_running)
-        self.connect(self.timebase,
-            QtCore.SIGNAL('currentIndexChanged(int)'), self.select_timebase)
+        self.connect(ui.channel,
+            'currentIndexChanged(int)', self.select_channel)
+        self.connect(ui.rescale,
+            'clicked()', self.rescale_graph)
+        self.connect(ui.mode,
+            'currentIndexChanged(int)', self.select_mode)
+        self.connect(ui.run,
+            'clicked(bool)', self.toggle_running)
+        self.connect(ui.timebase,
+            'currentIndexChanged(int)', self.select_timebase)
 
+    def connect(self, control, signal, action):
+        self.ui.connect(control, QtCore.SIGNAL(signal), action)
 
     def makeplot(self):
         '''set up plotting'''
         # draw a plot in the frame
-        p = Qwt5.QwtPlot(self.axes)
+        p = Qwt5.QwtPlot(self.ui.axes)
         cx = Qwt5.QwtPlotCurve('X')
         cy = Qwt5.QwtPlotCurve('Y')
         cx.setPen(QtGui.QPen(QtCore.Qt.blue))
@@ -171,7 +231,7 @@ class Viewer(widget, Ui_Viewer):
         self.p = p
         self.cx = cx
         self.cy = cy
-        self.axes.layout().addWidget(self.p)
+        self.ui.axes.layout().addWidget(p)
 
 
     # --------------------------------------------------------------------------
@@ -182,16 +242,18 @@ class Viewer(widget, Ui_Viewer):
 
     def rescale_graph(self):
         self.p.setAxisScale(Qwt5.QwtPlot.yLeft,
-            1.2 * numpy.amin(self.value), 1.2 * numpy.amax(self.value))
+            1.2 * numpy.nanmin(self.value), 1.2 * numpy.nanmax(self.value))
         self.p.replot()
 
     def select_timebase(self, ix):
         new_timebase = Timebase_list[ix][1]
-        self.p.setAxisScale(Qwt5.QwtPlot.xBottom, 0, new_timebase)
+        self.current_timebase = new_timebase
         self.monitor.resize(new_timebase, min(new_timebase, SCROLL_THRESHOLD))
+        self.reset_mode()
 
     def select_mode(self, ix):
-        print 'new mode', ix
+        self.mode_class = Display_modes[ix]
+        self.reset_mode()
 
     def toggle_running(self, running):
         if running:
@@ -203,11 +265,24 @@ class Viewer(widget, Ui_Viewer):
     # --------------------------------------------------------------------------
     # Data event handlers
 
+    def reset_mode(self):
+        mode = self.mode_class(self.current_timebase)
+        self.compute = mode.compute
+        self.xaxis = mode.xaxis
+
+        x = Qwt5.QwtPlot.xBottom
+        y = Qwt5.QwtPlot.yLeft
+        self.p.setAxisTitle(x, mode.xname)
+        self.p.setAxisTitle(y, mode.yname)
+        self.p.setAxisScale(x, mode.xmin, mode.xmax)
+        self.p.setAxisScaleEngine(x, mode.xscale())
+        self.p.setAxisScaleEngine(y, mode.yscale())
+
     def on_event(self, value):
-        self.value = value
-        t = numpy.arange(value.shape[0])
-        self.cx.setData(t, value[:, 0])
-        self.cy.setData(t, value[:, 1])
+        v = self.compute(value)
+        self.value = v
+        self.cx.setData(self.xaxis, v[:, 0])
+        self.cy.setData(self.xaxis, v[:, 1])
         self.p.replot()
 
     def on_eof(self):
@@ -217,7 +292,9 @@ class Viewer(widget, Ui_Viewer):
 
 
 # create and show form
-s = Viewer()
-s.show()
+ui_viewer = uic.loadUi(os.path.join(os.path.dirname(__file__), 'viewer.ui'))
+ui_viewer.show()
+# Bind code to form
+s = Viewer(ui_viewer)
 
 cothread.WaitForQuit()

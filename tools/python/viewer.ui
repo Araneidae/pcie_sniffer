@@ -14,7 +14,7 @@
    <string>Scope Example</string>
   </property>
   <layout class="QGridLayout">
-   <item row="0" column="0" colspan="8">
+   <item row="0" column="0" colspan="9">
     <widget class="QFrame" name="axes">
      <property name="sizePolicy">
       <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
@@ -30,7 +30,7 @@
      </property>
     </widget>
    </item>
-   <item row="1" column="5">
+   <item row="1" column="6">
     <spacer name="spacer1">
      <property name="orientation">
       <enum>Qt::Horizontal</enum>
@@ -73,10 +73,10 @@
      </property>
     </widget>
    </item>
-   <item row="1" column="7">
+   <item row="1" column="8">
     <widget class="QComboBox" name="mode"/>
    </item>
-   <item row="1" column="6">
+   <item row="1" column="7">
     <widget class="QCheckBox" name="run">
      <property name="text">
       <string>Run</string>
@@ -88,6 +88,13 @@
    </item>
    <item row="1" column="3">
     <widget class="QComboBox" name="timebase"/>
+   </item>
+   <item row="1" column="5">
+    <widget class="QCheckBox" name="autoscale">
+     <property name="text">
+      <string>Auto Scale</string>
+     </property>
+    </widget>
    </item>
   </layout>
  </widget>
