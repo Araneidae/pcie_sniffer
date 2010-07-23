@@ -22,11 +22,11 @@ void initialise_header(struct disk_header *header, uint64_t data_size)
 {
     memset(header, 0, sizeof(*header));
     strncpy(header->h.signature, DISK_SIGNATURE, sizeof(header->h.signature));
-    header->h.version = 1;
+    header->h.version = DISK_VERSION;
     header->h.data_start = DISK_HEADER_SIZE;
     header->h.data_size = data_size;
-    header->h.block_count = 0;
-    header->h.max_block_count = MAX_HEADER_BLOCKS;
+    header->h.segment_count = 0;
+    header->h.max_segment_count = MAX_HEADER_SEGMENTS;
     header->h.write_backlog = 0;
     header->h.disk_status = 0;
     header->h.write_buffer = 0;
@@ -48,20 +48,21 @@ bool validate_header(struct disk_header *header, off64_t file_size)
             "Invalid data size %llu in header", data_size)  &&
         TEST_OK_(data_size % DATA_LOCK_BLOCK_SIZE == 0,
             "Uneven size data area")  &&
-        TEST_OK_(header->h.max_block_count == MAX_HEADER_BLOCKS,
-            "Unexpected header block count: %u", header->h.max_block_count)  &&
-        TEST_OK_(header->h.block_count <= header->h.max_block_count,
-            "Too many blocks: %u", header->h.block_count);
+        TEST_OK_(header->h.max_segment_count == MAX_HEADER_SEGMENTS,
+            "Unexpected header block count: %u",
+                header->h.max_segment_count)  &&
+        TEST_OK_(header->h.segment_count <= header->h.max_segment_count,
+            "Too many segments: %u", header->h.segment_count);
 
-    /* Validate the blocks: there should be no overlap in offsets.  We don't
+    /* Validate the segments: there should be no overlap in offsets.  We don't
      * check the timestamps, as these are advisory only. */
-    off64_t data_stop = header->blocks[0].stop_offset;
+    off64_t data_stop = header->segments[0].stop_offset;
     off64_t last_start = data_stop;
     bool wrapped = false;
-    for (uint32_t i = 0; ok  &&  i < header->h.block_count; i ++)
+    for (uint32_t i = 0; ok  &&  i < header->h.segment_count; i ++)
     {
-        off64_t start = header->blocks[i].start_offset;
-        off64_t stop  = header->blocks[i].stop_offset;
+        off64_t start = header->segments[i].start_offset;
+        off64_t stop  = header->segments[i].stop_offset;
 
         ok =
             TEST_OK_(stop == last_start,
@@ -110,12 +111,12 @@ void print_header(FILE *out, struct disk_header *header)
         status, header->h.write_backlog / FA_FRAME_SIZE,
         100.0 * header->h.write_backlog / header->h.write_buffer,
         header->h.write_buffer,
-        header->h.block_count, header->h.max_block_count);
-    for (uint32_t i = 0; i < header->h.block_count; i ++)
+        header->h.segment_count, header->h.max_segment_count);
+    for (uint32_t i = 0; i < header->h.segment_count; i ++)
     {
-        struct block_record *block = &header->blocks[i];
-        int64_t start = block->start_offset / FA_FRAME_SIZE;
-        int64_t stop  = block->stop_offset  / FA_FRAME_SIZE;
+        struct segment_record *segment = &header->segments[i];
+        int64_t start = segment->start_offset / FA_FRAME_SIZE;
+        int64_t stop  = segment->stop_offset  / FA_FRAME_SIZE;
         int64_t length = stop - start;
         if (length <= 0)
             length += data_size;

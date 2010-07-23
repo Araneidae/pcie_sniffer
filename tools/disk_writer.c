@@ -58,18 +58,18 @@ static bool expired(off64_t offset)
         return offset <= write_offset  ||  old_write_offset < offset;
 }
 
-/* Flushes old archive blocks and updates the end pointer of the oldest block
+/* Flushes old archive segments and updates the end pointer of the oldest block
  * so that it is valid. */
-static void expire_archive_blocks(void)
+static void expire_archive_segments(void)
 {
-    /* Expire all older blocks that have completely fallen off. */
-    while (header.h.block_count > 1  &&
-           expired(header.blocks[header.h.block_count - 1].stop_offset))
-        header.h.block_count -= 1;
+    /* Expire all older segments that have completely fallen off. */
+    while (header.h.segment_count > 1  &&
+           expired(header.segments[header.h.segment_count - 1].stop_offset))
+        header.h.segment_count -= 1;
 
     /* If the start of the oldest block has expired then bring it forward. */
     off64_t *old_start =
-        &header.blocks[header.h.block_count - 1].start_offset;
+        &header.segments[header.h.segment_count - 1].start_offset;
     if (expired(*old_start)  ||  *old_start == old_write_offset)
         *old_start = write_offset;
     old_write_offset = write_offset;
@@ -87,19 +87,19 @@ static uint64_t get_now(void)
 /* Updates the file header with the record of a new gap. */
 static void start_archive_block(void)
 {
-    /* Very simple approach, simply push all the existing blocks down one and
+    /* Very simple approach, simply push all the existing segments down one and
      * record our new block at the start. */
-    memmove(&header.blocks[1], &header.blocks[0],
-        (MAX_HEADER_BLOCKS - 1) * sizeof(struct block_record));
-    header.h.block_count += 1;
-    if (header.h.block_count > MAX_HEADER_BLOCKS)
-        header.h.block_count = MAX_HEADER_BLOCKS;
+    memmove(&header.segments[1], &header.segments[0],
+        (header.h.max_segment_count - 1) * sizeof(struct segment_record));
+    header.h.segment_count += 1;
+    if (header.h.segment_count > header.h.max_segment_count)
+        header.h.segment_count = header.h.max_segment_count;
 
     uint64_t now = get_now();
-    header.blocks[0].start_sec = now;
-    header.blocks[0].stop_sec = now;
-    header.blocks[0].start_offset = write_offset;
-    header.blocks[0].stop_offset = -1;     // Will be overwritten!
+    header.segments[0].start_sec = now;
+    header.segments[0].stop_sec = now;
+    header.segments[0].start_offset = write_offset;
+    header.segments[0].stop_offset = -1;     // Will be overwritten!
 
     header.h.disk_status = 1;  // writing
 }
@@ -131,13 +131,13 @@ static void write_header(void)
 /* Update header timestamp and write it out if the timestamp has changed.. */
 static void update_header(bool force_write)
 {
-    expire_archive_blocks();
+    expire_archive_segments();
     uint64_t now = get_now();
-    if (force_write  ||  now != header.blocks[0].stop_sec)
+    if (force_write  ||  now != header.segments[0].stop_sec)
     {
         header.h.write_backlog = max_backlog;
-        header.blocks[0].stop_sec = now;
-        header.blocks[0].stop_offset = write_offset;
+        header.segments[0].stop_sec = now;
+        header.segments[0].stop_offset = write_offset;
         max_backlog = 0;
         write_header();
     }
@@ -226,8 +226,8 @@ static bool process_header(int write_buffer)
     if (ok)
     {
         memcpy(&header, header_mmap, DISK_HEADER_SIZE);
-        if (header.h.block_count > 0)
-            write_offset = header.blocks[0].stop_offset;
+        if (header.h.segment_count > 0)
+            write_offset = header.segments[0].stop_offset;
         else
             write_offset = 0;
         old_write_offset = write_offset;

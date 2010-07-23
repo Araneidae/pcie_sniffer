@@ -351,10 +351,10 @@ static void dump_data(void)
     /* Length of the data area in frames. */
     int64_t data_length = header.h.data_size / FA_FRAME_SIZE;
     /* If the end offset is relative, update it relative to the end of the
-     * most recently captured block. */
+     * most recently captured segment. */
     if (!absolute_offset)
     {
-        dump_end = header.blocks[0].stop_offset / FA_FRAME_SIZE - dump_end;
+        dump_end = header.segments[0].stop_offset / FA_FRAME_SIZE - dump_end;
         if (dump_end < 0)
             dump_end += data_length;
     }
