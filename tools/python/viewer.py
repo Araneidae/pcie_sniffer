@@ -107,11 +107,15 @@ Timebase_list = [
 
 SCROLL_THRESHOLD = 10000
 
+F_S = 10072
+
+char_mu     = u'\u03BC'             # Greek mu Unicode character
+char_sqrt   = u'\u221A'             # Mathematical square root sign
 
 
 class mode_raw:
     mode_name = 'Raw Signal'
-    yname = 'Position (um)'
+    yname = 'Position (%sm)' % char_mu
     xscale = Qwt5.QwtLinearScaleEngine
     yscale = Qwt5.QwtLinearScaleEngine
     xmin = 0
@@ -123,8 +127,8 @@ class mode_raw:
         else:
             self.xname = 'Time (s)'
             scale = 1.0
-        self.xmax = scale / 10072 * timebase
-        self.xaxis = scale / 10072 * numpy.arange(timebase)
+        self.xmax = scale / F_S * timebase
+        self.xaxis = scale / F_S * numpy.arange(timebase)
 
     def compute(self, value):
         return 1e-3 * value
@@ -133,41 +137,57 @@ class mode_raw:
 class mode_fft:
     mode_name = 'FFT'
     xname = 'Frequency (kHz)'
-    yname = 'Amplitude (???)'
+    yname = 'Amplitude (%sm/%sHz)' % (char_mu, char_sqrt)
     xscale = Qwt5.QwtLinearScaleEngine
     yscale = Qwt5.QwtLog10ScaleEngine
     xmin = 0
 
     def __init__(self, timebase):
-        self.len = timebase / 2
-        self.xmax = 1e-3 * 10072 / 2
-        self.xaxis = self.xmax * numpy.arange(self.len) / self.len
+        self.xmax = 1e-3 * F_S / 2
+        N2 = timebase // 2
+        self.xaxis = self.xmax * numpy.arange(N2) / N2
 
     def compute(self, value):
-        fft = numpy.abs(numpy.fft.fft(value, axis=0))
-        return fft[:self.len]
+        N = len(value)
+        fft = numpy.fft.fft(1e-3 * value, axis=0)[:N//2]
+        return numpy.abs(fft) * numpy.sqrt(2.0 / (F_S * N))
+
+class mode_fft_logt(mode_fft):
+    mode_name = 'FFT (log t)'
+    xname = 'Frequency (Hz)'
+    xscale = Qwt5.QwtLog10ScaleEngine
+
+    def __init__(self, timebase):
+        mode_fft.__init__(self, timebase)
+        self.xaxis = 1e3 * self.xaxis[1:]
+        self.xmin = self.xaxis[0]
+        self.xmax = self.xaxis[-1]
+
+    def compute(self, value):
+        return mode_fft.compute(self, value)[1:]
 
 
 class mode_integrated:
     mode_name = 'Integrated'
-    xname = 'Frequency (kHz)'
-    yname = 'Amplitude (???)'
+    xname = 'Frequency (Hz)'
+    yname = 'Cumulative amplitude (%sm)' % char_mu
     xscale = Qwt5.QwtLog10ScaleEngine
     yscale = Qwt5.QwtLog10ScaleEngine
 
     def __init__(self, timebase):
         self.len = timebase / 2
-        self.xmax = 1e-3 * 10072 / 2
+        self.xmax = 0.5 * F_S
         self.xaxis = self.xmax * numpy.arange(self.len)[1:] / self.len
         self.xmin = self.xaxis[0]
 
     def compute(self, value):
-        fft = numpy.abs(numpy.fft.fft(value, axis=0))
-        return numpy.cumsum(fft[1:self.len] ** 2, axis=0)
+        N = len(value)
+        fft = numpy.fft.fft(1e-3 * value, axis=0)[1 : N//2]
+        return numpy.sqrt(2 * numpy.cumsum(numpy.abs(fft**2), axis=0)) / N
 
 
 
-Display_modes = [mode_raw, mode_fft, mode_integrated]
+Display_modes = [mode_raw, mode_fft, mode_fft_logt, mode_integrated]
 
 
 class Viewer:
@@ -197,14 +217,11 @@ class Viewer:
         # Make the initial connections
         self.connect(ui.channel,
             'currentIndexChanged(int)', self.select_channel)
-        self.connect(ui.rescale,
-            'clicked()', self.rescale_graph)
-        self.connect(ui.mode,
-            'currentIndexChanged(int)', self.select_mode)
-        self.connect(ui.run,
-            'clicked(bool)', self.toggle_running)
         self.connect(ui.timebase,
             'currentIndexChanged(int)', self.select_timebase)
+        self.connect(ui.rescale, 'clicked()', self.rescale_graph)
+        self.connect(ui.mode, 'currentIndexChanged(int)', self.select_mode)
+        self.connect(ui.run, 'clicked(bool)', self.toggle_running)
 
     def connect(self, control, signal, action):
         self.ui.connect(control, QtCore.SIGNAL(signal), action)
@@ -287,7 +304,7 @@ class Viewer:
 
     def on_eof(self):
         print 'EOF on channel detected'
-        self.run.setCheckState(False)
+        self.ui.run.setCheckState(False)
         self.monitor.stop()
 
 
@@ -296,5 +313,6 @@ ui_viewer = uic.loadUi(os.path.join(os.path.dirname(__file__), 'viewer.ui'))
 ui_viewer.show()
 # Bind code to form
 s = Viewer(ui_viewer)
+
 
 cothread.WaitForQuit()
