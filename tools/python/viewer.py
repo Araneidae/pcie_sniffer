@@ -130,7 +130,12 @@ micrometre  = char_mu + 'm'
 
 class mode_common:
     def __init__(self, parent):
-        pass
+        self.parent = parent
+
+    def plot(self, value):
+        v = self.compute(value)
+        self.parent.cx.setData(self.xaxis, v[:, 0])
+        self.parent.cy.setData(self.xaxis, v[:, 1])
 
     def set_enable(self, enabled):
         pass
@@ -162,21 +167,85 @@ class mode_raw(mode_common):
     ymax = 10
 
     rescale = mode_common.linear_rescale
+    Decimations = [1, 100, 1000, 10000]
+
+    def __init__(self, parent):
+        mode_common.__init__(self, parent)
+        self.label = QtGui.QLabel('Decimation', parent.ui)
+        self.selector = QtGui.QComboBox(parent.ui)
+        parent.ui.bottom_row.addWidget(self.label)
+        parent.ui.bottom_row.addWidget(self.selector)
+        parent.connect(self.selector,
+            'currentIndexChanged(int)', self.set_decimation)
+        self.maxx = parent.makecurve(QtCore.Qt.blue, True)
+        self.maxy = parent.makecurve(QtCore.Qt.red, True)
+        self.minx = parent.makecurve(QtCore.Qt.blue, True)
+        self.miny = parent.makecurve(QtCore.Qt.red, True)
+        self.decimation = 1
+        self.set_enable(False)
+
+    def set_enable(self, enabled):
+        self.label.setVisible(enabled)
+        self.selector.setVisible(enabled)
+        self.maxx.setVisible(enabled and self.decimation > 1)
+        self.maxy.setVisible(enabled and self.decimation > 1)
+        self.minx.setVisible(enabled and self.decimation > 1)
+        self.miny.setVisible(enabled and self.decimation > 1)
 
     def set_timebase(self, timebase):
+        self.timebase = timebase
         if timebase <= 10000:
             self.xname = 'Time'
             self.xunits = 'ms'
-            scale = 1e3
+            self.scale = 1e3
         else:
             self.xname = 'Time'
             self.xunits = 's'
-            scale = 1.0
-        self.xmax = scale / F_S * timebase
-        self.xaxis = scale / F_S * numpy.arange(timebase)
+            self.scale = 1.0
+        self.xmax = self.scale / F_S * timebase
 
-    def compute(self, value):
-        return value
+        self.selector.blockSignals(True)
+        self.selector.clear()
+        valid_items = [n for n in self.Decimations if n*50 <= timebase]
+        self.selector.addItems(['%d:1' % n for n in valid_items])
+
+        if self.decimation not in valid_items:
+            self.decimation = valid_items[-1]
+        current_index = valid_items.index(self.decimation)
+        self.selector.setCurrentIndex(current_index)
+        self.selector.blockSignals(False)
+
+        self.set_decimation(current_index)
+
+    def set_decimation(self, ix):
+        self.decimation = self.Decimations[ix]
+        self.xaxis = self.scale / F_S * \
+            self.decimation * numpy.arange(self.timebase / self.decimation)
+        self.maxx.setVisible(self.decimation > 1)
+        self.maxy.setVisible(self.decimation > 1)
+        self.minx.setVisible(self.decimation > 1)
+        self.miny.setVisible(self.decimation > 1)
+
+    def plot(self, value):
+        if self.decimation == 1:
+            mean = value
+        else:
+            value = value.reshape(
+                (len(value)/self.decimation, self.decimation, 2))
+            mean = numpy.mean(value, axis=1)
+            min = numpy.min(value, axis=1)
+            max = numpy.max(value, axis=1)
+
+            self.maxx.setData(self.xaxis, max[:, 0])
+            self.maxy.setData(self.xaxis, max[:, 1])
+            self.minx.setData(self.xaxis, min[:, 0])
+            self.miny.setData(self.xaxis, min[:, 1])
+
+        self.parent.cx.setData(self.xaxis, mean[:, 0])
+        self.parent.cy.setData(self.xaxis, mean[:, 1])
+
+    def get_minmax(self, value):
+        return numpy.nanmin(value), numpy.nanmax(value)
 
 
 def scaled_abs_fft(value, axis=0):
@@ -218,8 +287,8 @@ class mode_fft(mode_common):
     Decimations = [1, 10, 100]
 
     def __init__(self, parent):
+        mode_common.__init__(self, parent)
         # Create the GUI components for managing the decimation selection
-        self.parent = parent
         self.label = QtGui.QLabel('Decimation', parent.ui)
         self.selector = QtGui.QComboBox(parent.ui)
         parent.ui.bottom_row.addWidget(self.label)
@@ -230,23 +299,23 @@ class mode_fft(mode_common):
         self.decimation = 1
 
     def set_timebase(self, timebase):
-        self.xaxis = fft_timebase(timebase, 1e-3)
-
-        # Manage the set of available decimations
         self.timebase = timebase
 
+        self.selector.blockSignals(True)
         # Update selection of decimations to match those available for the
         # selected decimation
-        self.selector.blockSignals(True)
         self.selector.clear()
         valid_items = [n for n in self.Decimations if 1000 * n <= timebase]
         self.selector.addItems(['%d:1' % n for n in valid_items])
-        self.selector.blockSignals(False)
 
         # Restore the current selection, as far as possible.
         if self.decimation not in valid_items:
             self.decimation = valid_items[-1]
-        self.selector.setCurrentIndex(valid_items.index(self.decimation))
+        current_index = valid_items.index(self.decimation)
+        self.selector.setCurrentIndex(current_index)
+        self.selector.blockSignals(False)
+
+        self.set_decimation(current_index)
 
     def set_enable(self, enabled):
         # Simply show or hide the decimation GUI
@@ -332,6 +401,7 @@ class mode_fft_logf(mode_common):
             return numpy.sqrt(self.history)
 
     def __init__(self, parent):
+        mode_common.__init__(self, parent)
         self.label = QtGui.QLabel('Filter', parent.ui)
         self.selector = QtGui.QComboBox(parent.ui)
         self.selector.addItems(['%ds' % f for f in self.Filters])
@@ -375,7 +445,7 @@ class mode_integrated(mode_common):
         return numpy.sqrt(F_S / N * numpy.cumsum(fft2, axis=0))
 
     def __init__(self, parent):
-        self.parent = parent
+        mode_common.__init__(self, parent)
         self.button = QtGui.QPushButton('Background', parent.ui)
         parent.ui.bottom_row.addWidget(self.button)
         parent.connect(self.button, 'clicked()', self.set_background)
@@ -621,9 +691,7 @@ class Viewer:
     # Data event handlers
 
     def on_data_update(self, value):
-        v = self.mode.compute(value)
-        self.cx.setData(self.mode.xaxis, v[:, 0])
-        self.cy.setData(self.mode.xaxis, v[:, 1])
+        self.mode.plot(value)
         if self.ui.autoscale.isChecked() and self.zoom.zoomRectIndex() == 0:
             self.mode.rescale(value)
             self.plot.setAxisScale(
