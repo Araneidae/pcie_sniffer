@@ -307,15 +307,49 @@ class mode_fft_logf(mode_common):
     ymin = 1e-3
     ymax = 100
 
+    Filters = [1, 10, 100]
+
     def set_timebase(self, timebase):
         self.counts = compute_gaps(timebase//2 - 1, 1000)
         self.xaxis = F_S * numpy.cumsum(self.counts) / timebase
         self.xmin = self.xaxis[0]
+        self.reset = True
 
     def compute(self, value):
         fft = scaled_abs_fft(value)[1:]
-        return self.xaxis[:, None] * numpy.sqrt(
+        fft_logf = self.xaxis[:, None] * numpy.sqrt(
             condense(fft**2, self.counts) / self.counts[:,None])
+
+        if self.filter == 1:
+            return fft_logf
+        elif self.reset:
+            self.reset = False
+            self.history = fft_logf**2
+            return fft_logf
+        else:
+            self.history = \
+                self.filter * fft_logf**2 + (1 - self.filter) * self.history
+            return numpy.sqrt(self.history)
+
+    def __init__(self, parent):
+        self.label = QtGui.QLabel('Filter', parent.ui)
+        self.selector = QtGui.QComboBox(parent.ui)
+        self.selector.addItems(['%ds' % f for f in self.Filters])
+        parent.ui.bottom_row.addWidget(self.label)
+        parent.ui.bottom_row.addWidget(self.selector)
+        parent.connect(self.selector,
+            'currentIndexChanged(int)', self.set_filter)
+        self.set_enable(False)
+        self.filter = 1
+        self.reset = True
+
+    def set_enable(self, enabled):
+        self.label.setVisible(enabled)
+        self.selector.setVisible(enabled)
+
+    def set_filter(self, ix):
+        self.filter = 1.0 / self.Filters[ix]
+        self.reset = True
 
 
 class mode_integrated(mode_common):
