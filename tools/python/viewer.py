@@ -112,9 +112,10 @@ class monitor:
 # ------------------------------------------------------------------------------
 #   Mode Specific Functionality
 
-# Three basic display modes are supported: raw data, FFT of data and integrated
-# displacement (derived from the FFT).  These modes and their user support
-# functionality are implemented by the classes below, one for each display mode.
+# Four display modes are supported: raw data, FFT of data with linear and with
+# logarithmic frequency axis, and integrated displacement (derived from the
+# FFT).  These modes and their user support functionality are implemented by the
+# classes below, one for each display mode.
 
 
 F_S = 10072.0
@@ -536,6 +537,10 @@ class SpyMouse(QtCore.QObject):
 
 
 class Viewer:
+    Plot_tooltip = \
+        'Click and drag to zoom in, ' \
+        'middle click to zoom out, right click and drag to pan.'
+
     '''application class'''
     def __init__(self, ui):
         self.ui = ui
@@ -557,6 +562,8 @@ class Viewer:
         ui.position_y = QtGui.QLabel('Y:     ', ui.statusbar)
         ui.statusbar.addPermanentWidget(ui.position_x)
         ui.statusbar.addPermanentWidget(ui.position_y)
+        ui.status_message = QtGui.QLabel('', ui.statusbar)
+        ui.statusbar.addWidget(ui.status_message)
 
         # For each possible display mode create the initial state used to manage
         # that display mode and set up the initial display mode.
@@ -617,6 +624,7 @@ class Viewer:
         plot.setCanvasBackground(QtCore.Qt.black)
 
         # Enable zooming
+        plot.setStatusTip(self.Plot_tooltip)
         zoom = Qwt5.QwtPlotZoomer(plot.canvas())
         zoom.setRubberBandPen(QtGui.QPen(QtCore.Qt.white))
         zoom.setTrackerPen(QtGui.QPen(QtCore.Qt.white))
@@ -667,13 +675,12 @@ class Viewer:
         bpm = BPM_list[self.group_index][1][ix]
         self.channel = bpm[1]
         self.monitor.set_id(self.channel)
-        self.ui.statusbar.showMessage(
-            'BPM: %s (id %d)' % (bpm[0], self.channel))
+        ui.status_message.setText('BPM: %s (id %d)' % (bpm[0], self.channel))
 
     def set_channel_id(self):
         self.channel = int(self.ui.channel_id.text())
         self.monitor.set_id(self.channel)
-        self.ui.statusbar.showMessage('BPM id %d' % self.channel)
+        ui.status_message.setText('BPM id %d' % self.channel)
 
     def rescale_graph(self):
         self.mode.rescale(self.monitor.read())
