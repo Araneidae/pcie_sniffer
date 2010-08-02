@@ -98,14 +98,14 @@ class monitor:
                 self.buffer.write(self.connection.read(self.read_size)[:,0,:])
                 self.data_ready += self.read_size
                 if self.data_ready >= self.update_size:
-                    self.on_event(self.buffer.read(self.notify_size))
+                    self.on_event(self.read())
                     self.data_ready -= self.update_size
         except falib.connection.EOF:
             self.on_eof()
 
     def read(self):
         '''Can be called at any time to read the most recent buffer.'''
-        return self.buffer.read(self.notify_size)
+        return 1e-3 * self.buffer.read(self.notify_size)
 
 
 
@@ -120,6 +120,7 @@ class monitor:
 F_S = 10072.0
 
 # Unicode characters
+char_times  = u'\u00D7'             # Multiplication sign
 char_mu     = u'\u03BC'             # Greek mu
 char_sqrt   = u'\u221A'             # Square root sign
 char_cdot   = u'\u22C5'             # Centre dot
@@ -175,14 +176,14 @@ class mode_raw(mode_common):
         self.xaxis = scale / F_S * numpy.arange(timebase)
 
     def compute(self, value):
-        return 1e-3 * value
+        return value
 
 
 def scaled_abs_fft(value, axis=0):
     '''Returns the fft of value (along axis 0) scaled so that values are in
     units per sqrt(Hz).  The magnitude of the first half of the spectrum is
     returned.'''
-    fft = numpy.fft.fft(1e-3 * value, axis=axis)
+    fft = numpy.fft.fft(value, axis=axis)
 
     # This trickery below is simply implementing fft[:N//2] where the slicing is
     # along the specified axis rather than axis 0.  It does seem a bit
@@ -297,7 +298,7 @@ def condense(value, counts):
 class mode_fft_logf(mode_common):
     mode_name = 'FFT (log f)'
     xname = 'Frequency'
-    yname = 'Amplitude freq'
+    yname = 'Amplitude %s freq' % char_times
     xunits = 'Hz'
     yunits = '%s%s%sHz' % (micrometre, char_cdot, char_sqrt)
     xscale = Qwt5.QwtLog10ScaleEngine
@@ -423,8 +424,10 @@ class Viewer:
 
         ui.channel_id.setValidator(QtGui.QIntValidator(0, 255, ui))
 
-        ui.position = QtGui.QLabel('X:      Y:     ', ui.statusbar)
-        ui.statusbar.addPermanentWidget(ui.position)
+        ui.position_x = QtGui.QLabel('X:     ', ui.statusbar)
+        ui.position_y = QtGui.QLabel('Y:     ', ui.statusbar)
+        ui.statusbar.addPermanentWidget(ui.position_x)
+        ui.statusbar.addPermanentWidget(ui.position_y)
 
         # For each possible display mode create the initial state used to manage
         # that display mode and set up the initial display mode.
@@ -576,9 +579,8 @@ class Viewer:
     def mouse_move(self, pos):
         x = self.plot.invTransform(Qwt5.QwtPlot.xBottom, pos.x())
         y = self.plot.invTransform(Qwt5.QwtPlot.yLeft, pos.y())
-        self.ui.position.setText(
-            'X: %8.4g %s  Y: %8.4g %s' %
-            (x, self.mode.xunits, y, self.mode.yunits))
+        self.ui.position_x.setText('X: %8.4g %s' % (x, self.mode.xunits))
+        self.ui.position_y.setText('Y: %8.4g %s' % (y, self.mode.yunits))
 
 
     # --------------------------------------------------------------------------
