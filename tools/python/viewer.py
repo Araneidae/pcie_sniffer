@@ -54,7 +54,8 @@ class buffer:
 
 
 class monitor:
-    def __init__(self, on_event, on_eof, buffer_size, read_size):
+    def __init__(self, server, on_event, on_eof, buffer_size, read_size):
+        self.server = server
         self.on_event = on_event
         self.on_eof = on_eof
         self.buffer = buffer(buffer_size)
@@ -66,7 +67,7 @@ class monitor:
 
     def start(self):
         assert not self.running
-        self.connection = falib.connection([self.id])
+        self.connection = falib.connection([self.id], server)
         self.running = True
         self.buffer.reset()
         self.task = cothread.Spawn(self.__monitor)
@@ -100,8 +101,8 @@ class monitor:
                 if self.data_ready >= self.update_size:
                     self.on_event(self.read())
                     self.data_ready -= self.update_size
-        except falib.connection.EOF:
-            self.on_eof()
+        except Exception, exception:
+            self.on_eof(str(exception))
 
     def read(self):
         '''Can be called at any time to read the most recent buffer.'''
@@ -542,13 +543,14 @@ class Viewer:
         'middle click to zoom out, right click and drag to pan.'
 
     '''application class'''
-    def __init__(self, ui):
+    def __init__(self, ui, server):
         self.ui = ui
 
         # make any contents fill the empty frame
         self.makeplot()
 
-        self.monitor = monitor(self.on_data_update, self.on_eof, 500000, 1000)
+        self.monitor = monitor(
+            server, self.on_data_update, self.on_eof, 500000, 1000)
 
         # Prepare the selections in the controls
         ui.timebase.addItems([l[0] for l in Timebase_list])
@@ -675,12 +677,13 @@ class Viewer:
         bpm = BPM_list[self.group_index][1][ix]
         self.channel = bpm[1]
         self.monitor.set_id(self.channel)
-        ui.status_message.setText('BPM: %s (id %d)' % (bpm[0], self.channel))
+        self.ui.status_message.setText(
+            'BPM: %s (id %d)' % (bpm[0], self.channel))
 
     def set_channel_id(self):
         self.channel = int(self.ui.channel_id.text())
         self.monitor.set_id(self.channel)
-        ui.status_message.setText('BPM id %d' % self.channel)
+        self.ui.status_message.setText('BPM id %d' % self.channel)
 
     def rescale_graph(self):
         self.mode.rescale(self.monitor.read())
@@ -736,10 +739,10 @@ class Viewer:
                 Qwt5.QwtPlot.yLeft, self.mode.ymin, self.mode.ymax)
         self.plot.replot()
 
-    def on_eof(self):
+    def on_eof(self, message):
         self.ui.run.setCheckState(False)
         self.monitor.stop()
-        self.ui.statusbar.showMessage('FA server disconnected')
+        self.ui.status_message.setText('FA server disconnected: %s' % message)
 
 
     # --------------------------------------------------------------------------
@@ -750,7 +753,7 @@ class Viewer:
             self.monitor.start()
         except Exception, message:
             self.ui.run.setCheckState(False)
-            self.ui.statusbar.showMessage(
+            self.ui.status_message.setText(
                 'Unable to connect to server: %s' % message)
 
 
@@ -790,7 +793,10 @@ class UI(ui_form, ui_base):
 ui = UI()
 ui.setupUi(ui)
 
-s = Viewer(ui)
+server = falib.DEFAULT_SERVER
+if len(sys.argv) > 1:
+    server = sys.argv[1]
+s = Viewer(ui, server)
 
 ui.show()
 cothread.WaitForQuit()
