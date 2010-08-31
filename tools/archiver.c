@@ -27,27 +27,39 @@
 /* A good default memory buffer size is 256MB. */
 #define BUFFER_SIZE     (256 * K * K)
 
-
+/* Default IO block size. */
+#define DEFAULT_BLOCK_SIZE  (512 * K)
 
 
 /*****************************************************************************/
 /*                               Option Parsing                              */
 /*****************************************************************************/
 
+/* If true then the archiver runs as a daemon with all messages written to
+ * syslog. */
 static bool daemon_mode = false;
 static char *argv0;
+/* Name of FA sniffer device. */
 static const char *fa_sniffer_device = "/dev/fa_sniffer0";
+/* Name of archive store. */
 static char *output_filename = NULL;
+/* If set, the PID is written to this file, and the archiver can then be
+ * interrupted with the command
+ *      kill $(cat $pid_filename)   */
 static char *pid_filename = NULL;
+/* In memory buffer. */
 static unsigned int buffer_size = BUFFER_SIZE;
+/* Socket used for serving remote connections. */
 static int server_socket = 8888;
+/* True if archiving to disk, false if only serving live subscription data. */
+static bool archiving = false;
 
 
 
 static void usage(void)
 {
     printf(
-"Usage: %s [options] <archive-file>\n"
+"Usage: %s [options] [<archive-file>]\n"
 "Captures continuous FA streaming data to disk\n"
 "\n"
 "Options:\n"
@@ -115,10 +127,18 @@ static bool process_options(int *argc, char ***argv)
 
 static bool process_args(int argc, char **argv)
 {
-    return
-        process_options(&argc, &argv)  &&
-        TEST_OK_(argc == 1, "Try `%s -h` for usage", argv0)  &&
-        DO_(output_filename = argv[0]);
+    bool ok = process_options(&argc, &argv);
+    if (ok)
+    {
+        archiving = argc > 0;
+        if (archiving)
+        {
+            output_filename = argv[0];
+            argc --;
+        }
+    }
+    return ok  &&
+        TEST_OK_(argc == 0, "Try `%s -h` for usage", argv0);
 }
 
 
@@ -189,17 +209,20 @@ static bool maybe_daemonise(void)
 int main(int argc, char **argv)
 {
     struct disk_header *header;
+    uint32_t block_size = DEFAULT_BLOCK_SIZE;
     bool ok =
         process_args(argc, argv)  &&
         initialise_signals()  &&
-        initialise_disk_writer(output_filename, buffer_size, &header)  &&
+        IF_(archiving,
+            initialise_disk_writer(output_filename, buffer_size, &header)  &&
+            DO_(block_size = header->h.block_size))  &&
         maybe_daemonise()  &&
         /* All the thread initialisation must be done after daemonising, as of
          * course threads don't survive across the daemon() call!  Alas, this
          * means that many startup errors go into syslog rather than stderr. */
-        initialise_buffer(
-            header->h.block_size, buffer_size / header->h.block_size)  &&
-        start_disk_writer()  &&
+        initialise_buffer(block_size, buffer_size / block_size)  &&
+        IF_(archiving,
+            start_disk_writer())  &&
         initialise_sniffer(fa_sniffer_device)  &&
         initialise_server(server_socket);
 
@@ -215,7 +238,8 @@ int main(int argc, char **argv)
         log_message("Shutting down");
         terminate_server();
         terminate_sniffer();
-        terminate_disk_writer();
+        if (archiving)
+            terminate_disk_writer();
         if (pid_filename)
             TEST_IO(unlink(pid_filename));
         log_message("Shut Down");
