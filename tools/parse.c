@@ -88,16 +88,22 @@ bool parse_size64(const char **string, uint64_t *result)
 bool report_parse_error(
     const char *message, bool ok, const char *string, const char **end)
 {
-    if (ok)
-        ok = parse_end(end);
-    char error_message[1024];
-    if (!ok)
+    if (ok  &&  parse_end(end))
     {
-        /* Convert local parse error message into a more global message. */
-        snprintf(error_message, sizeof(error_message),
+        pop_error_handling();
+        return true;
+    }
+    else
+    {
+        /* Convert local parse error message into a more global message.  We
+         * have to hang onto the new error message while we pop the error
+         * context so the new message becomes the error message. */
+        char *error_message = hprintf(
             "Error parsing %s: %s at offset %d in \"%s\"",
             message, get_error_message(), *end - string, string);
+        pop_error_handling();
+        print_error("%s", error_message);
+        free(error_message);
+        return false;
     }
-    pop_error_handling();
-    return TEST_OK_(ok, "%s", error_message);
 }

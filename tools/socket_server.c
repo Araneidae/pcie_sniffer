@@ -31,12 +31,11 @@ static void __attribute__((format(printf, 2, 3)))
 {
     va_list args;
     va_start(args, format);
-    int len = vsnprintf(NULL, 0, format, args);
-    char *buffer = alloca(len + 1);
-    vsnprintf(buffer, len + 1, format, args);
-    if (!TEST_write(sock, buffer, len))
+    char *buffer = vhprintf(format, args);
+    if (!TEST_write(sock, buffer, strlen(buffer)))
         log_error("Unable to write \"%s\" to socket %d, error: %s\n",
             buffer, sock, get_error_message());
+    free(buffer);
 }
 
 

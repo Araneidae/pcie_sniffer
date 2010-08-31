@@ -6,12 +6,9 @@
 #include <errno.h>
 #include <stdarg.h>
 #include <syslog.h>
+#include <pthread.h>
 
 #include "error.h"
-
-
-/* Fixed on-stack buffers for message logging. */
-#define MESSAGE_LENGTH  512
 
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -53,13 +50,14 @@ void reset_error_message(void)
 }
 
 
-static bool save_message(const char *message)
+/* Takes ownership of message if the error stack is non-empty. */
+static bool save_message(char *message)
 {
     struct error_stack *top = error_stack;
     if (top)
     {
-        top->message = realloc(top->message, strlen(message) + 1);
-        strcpy(top->message, message);
+        free(top->message);
+        top->message = message;
         return true;
     }
     else
@@ -69,7 +67,37 @@ static bool save_message(const char *message)
 
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+/* Printf to the heap. */
+
+char * vhprintf(const char *format, va_list args)
+{
+    /* To determine how long the resulting string should be we print the string
+     * twice, first into an empty buffer. */
+    int length = vsnprintf(NULL, 0, format, args) + 1;
+    char *buffer = malloc(length);
+    vsnprintf(buffer, length, format, args);
+    return buffer;
+}
+
+
+char * hprintf(const char *format, ...)
+{
+    va_list args;
+    va_start(args, format);
+    return vhprintf(format, args);
+}
+
+
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 /* Error handling and logging. */
+
+pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
+static void lock(void)     { ASSERT_0(pthread_mutex_lock(&log_mutex)); }
+static void unlock(void*_) { ASSERT_0(pthread_mutex_unlock(&log_mutex)); }
+#define LOCK()      lock();  pthread_cleanup_push(unlock, NULL)
+#define UNLOCK()    pthread_cleanup_pop(true)
+
 
 /* Determines whether error messages go to stderr or syslog. */
 static bool daemon_mode = false;
@@ -91,12 +119,15 @@ void start_logging(const char *ident)
 
 void vlog_message(int priority, const char *format, va_list args)
 {
-    char message[MESSAGE_LENGTH];
-    vsnprintf(message, sizeof(message), format, args);
+    LOCK();
     if (daemon_mode)
-        syslog(priority, "%s", message);
+        vsyslog(priority, format, args);
     else
-        fprintf(stderr, "%s\n", message);
+    {
+        vfprintf(stderr, format, args);
+        fprintf(stderr, "\n");
+    }
+    UNLOCK();
 }
 
 void log_message(const char * message, ...)
@@ -117,18 +148,11 @@ void log_error(const char * message, ...)
 }
 
 
-
-void print_error(const char * message, ...)
+static char * add_strerror(char *message, int last_errno)
 {
-    /* Large enough not to really worry about overflow.  If we do generate a
-     * silly message that's too big, then that's just too bad. */
-    int error = errno;
-    char error_message[MESSAGE_LENGTH];
-    va_list args;
-    va_start(args, message);
-
-    int Count = vsnprintf(error_message, MESSAGE_LENGTH, message, args);
-    if (error != 0)
+    if (last_errno == 0)
+        return message;
+    else
     {
         /* This is very annoying: strerror() is not not necessarily thread
          * safe ... but not for any compelling reason, see:
@@ -142,18 +166,37 @@ void print_error(const char * message, ...)
          *
          * Ah well.  We go with the GNU definition, so here is a buffer to
          * maybe use for the message. */
-        char StrError[MESSAGE_LENGTH];
-        snprintf(error_message + Count, MESSAGE_LENGTH - Count,
-            ": (%d) %s", error, strerror_r(error, StrError, sizeof(StrError)));
+        char StrError[64];
+        char *result = hprintf("%s: (%d) %s", message, last_errno,
+            strerror_r(last_errno, StrError, sizeof(StrError)));
+        free(message);
+        return result;
     }
-    if (!save_message(error_message))
-        log_error("%s", error_message);
+}
+
+
+void print_error(const char * format, ...)
+{
+    int last_errno = errno;
+    va_list args;
+    va_start(args, format);
+    char *message = add_strerror(vhprintf(format, args), last_errno);
+    if (!save_message(message))
+    {
+        log_error("%s", message);
+        free(message);
+    }
 }
 
 
 void panic_error(const char * filename, int line)
 {
-    print_error("panic at %s, line %d", filename, line);
+    int last_errno = errno;
+    char *message = add_strerror(
+        hprintf("panic at %s, line %d", filename, line), last_errno);
+    log_error("%s", message);
+    free(message);
+
     fflush(stderr);
     _exit(255);
 }

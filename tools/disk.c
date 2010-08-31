@@ -286,30 +286,30 @@ void dump_binary(FILE *out, void *buffer, size_t length)
 
     for (size_t a = 0; a < length; a += 16)
     {
-        printf("%08zx: ", a);
+        fprintf(out, "%08zx: ", a);
         for (int i = 0; i < 16; i ++)
         {
             if (a + i < length)
-                printf(" %02x", dump[a+i]);
+                fprintf(out, " %02x", dump[a+i]);
             else
-                printf("   ");
+                fprintf(out, "   ");
             if (i % 16 == 7)
-                printf(" ");
+                fprintf(out, " ");
         }
 
-        printf("  ");
+        fprintf(out, "  ");
         for (int i = 0; i < 16; i ++)
         {
             uint8_t c = dump[a+i];
             if (a + i < length)
-                printf("%c", 32 <= c  &&  c < 127 ? c : '.');
+                fprintf(out, "%c", 32 <= c  &&  c < 127 ? c : '.');
             else
-                printf(" ");
+                fprintf(out, " ");
             if (i % 16 == 7)
-                printf(" ");
+                fprintf(out, " ");
         }
-        printf("\n");
+        fprintf(out, "\n");
     }
     if (length % 16 != 0)
-        printf("\n");
+        fprintf(out, "\n");
 }
