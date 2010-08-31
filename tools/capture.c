@@ -114,7 +114,7 @@ static bool parse_args(int argc, char **argv)
         TEST_OK_(argc == 2,
             "Wrong number of arguments.  Try `capture -h` for help.")  &&
         DO_(server_name = argv[0])  &&
-        parse_mask(argv[1], mask);
+        parse_mask(argv[1], mask, NULL);
 }
 
 

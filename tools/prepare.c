@@ -150,7 +150,7 @@ static bool process_args(int argc, char **argv)
     return
         process_opts(&argc, &argv)  &&
         TEST_OK_(argc == 2, "Try -h for usage")  &&
-        parse_mask(argv[0], archive_mask)  &&
+        parse_mask(argv[0], archive_mask, NULL)  &&
         DO_(file_name = argv[1]);
 }
 

@@ -27,7 +27,7 @@ CPPFLAGS += -D_FILE_OFFSET_BITS=64
 LDFLAGS += -lpthread -lrt -lm
 
 
-BUILD = archiver read prepare capture
+BUILD = archiver prepare capture
 
 archiver_SRCS += archiver.c
 archiver_SRCS += error.c
@@ -38,6 +38,7 @@ archiver_SRCS += disk.c
 archiver_SRCS += socket_server.c
 archiver_SRCS += mask.c
 archiver_SRCS += transform.c
+archiver_SRCS += reader.c
 
 read_SRCS += read.c
 read_SRCS += error.c

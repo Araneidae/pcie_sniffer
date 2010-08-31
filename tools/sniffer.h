@@ -1,7 +1,6 @@
 /* Interface to sniffer capture routines. */
 
 struct fa_entry { int32_t x, y; };
-typedef struct fa_entry fa_entry_t;
 
 /* Size of a single FA frame in bytes: 256 entries, each consisting of two 4
  * byte integers. */

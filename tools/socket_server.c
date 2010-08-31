@@ -19,6 +19,8 @@
 #include "archiver.h"
 #include "mask.h"
 #include "buffer.h"
+#include "reader.h"
+
 #include "socket_server.h"
 
 
@@ -28,7 +30,7 @@ static void write_string(int sock, const char *string)
 }
 
 
-static void process_http(int scon, char *buf, ssize_t rx)
+static void process_http(int scon, char *buf, ssize_t rx, size_t buf_size)
 {
     write_string(scon,
         "HTTP/1.0 200 OK\r\n\r\n<HTML><BODY>Ok!</BODY></HTML>\r\n");
@@ -40,7 +42,7 @@ static void process_http(int scon, char *buf, ssize_t rx)
  *  CS      Prints a simple status report
  *  CF      Returns current sample frequency
  */
-static void process_command(int scon, char *buf, ssize_t rx)
+static void process_command(int scon, char *buf, ssize_t rx, size_t buf_size)
 {
     if (rx >= 2)
     {
@@ -69,22 +71,16 @@ static void process_command(int scon, char *buf, ssize_t rx)
 }
 
 
-static void process_read(int scon, char *buf, ssize_t rx)
-{
-    write_string(scon, "Not implemented\n");
-}
-
-
 /* A subscription is a command of the form S<mask> where <mask> is a mask
  * specification as described in mask.h.  The default mask is empty. */
-static void process_subscribe(int scon, char *buf, ssize_t rx)
+static void process_subscribe(int scon, char *buf, ssize_t rx, size_t buf_size)
 {
     filter_mask_t mask;
     /* A subscribe request is either S<mask> or SR<raw-mask>. */
     bool parse_ok = IF_ELSE(
         buf[1] == 'R',
-            parse_raw_mask(buf + 2, mask),
-            parse_mask(buf + 1, mask));
+            parse_raw_mask(buf + 2, mask, NULL),
+            parse_mask(buf + 1, mask, NULL));
     if (parse_ok)
     {
         struct reader_state *reader = open_reader(false);
@@ -107,7 +103,7 @@ static void process_subscribe(int scon, char *buf, ssize_t rx)
 }
 
 
-static void process_error(int scon, char *buf, ssize_t rx)
+static void process_error(int scon, char *buf, ssize_t rx, size_t buf_size)
 {
     write_string(scon, "Invalid command\n");
 }
@@ -115,7 +111,7 @@ static void process_error(int scon, char *buf, ssize_t rx)
 
 struct command_table {
     char id;            // Identification character
-    void (*process)(int scon, char *buf, ssize_t rx);
+    void (*process)(int scon, char *buf, ssize_t rx, size_t buf_size);
 } command_table[] = {
     { 'G', process_http },
     { 'C', process_command },
@@ -141,14 +137,15 @@ static void * process_connection(void *context)
     char buf[4096];
     ssize_t rx;
     memset(buf, 0, sizeof(buf));
-    if (TEST_IO(rx = read(scon, buf, sizeof(buf)))  &&  rx > 0)
+    if (TEST_IO(rx = read(scon, buf, sizeof(buf) - 1))  &&  rx > 0)
     {
+        buf[rx] = '\0';
         log_message("Read: \"%.*s\"", (int)rx, buf);
         /* Command successfully read, dispatch it to the appropriate handler. */
         struct command_table * command = command_table;
         while (command->id  &&  command->id != buf[0])
             command += 1;
-        command->process(scon, buf, rx);
+        command->process(scon, buf, rx, sizeof(buf));
     }
     TEST_IO(close(scon));
     return NULL;

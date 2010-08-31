@@ -127,13 +127,13 @@ static void update_backlog(struct reader_state *reader)
 struct reader_state * open_reader(bool reserved_reader)
 {
     struct reader_state *reader = malloc(sizeof(struct reader_state));
-    reader->index_out = buffer_index_in;
     reader->underflowed = false;
     reader->backlog = 0;
     reader->running = true;
     INIT_LIST_HEAD(&reader->reserved_entry);
 
     LOCK();
+    reader->index_out = buffer_index_in;
     list_add_tail(&reader->list_entry, &all_readers);
     if (reserved_reader)
         list_add_tail(&reader->reserved_entry, &reserved_readers);
