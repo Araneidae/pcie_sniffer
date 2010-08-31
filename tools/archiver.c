@@ -71,6 +71,7 @@ static void usage(void)
 "    -D   Run as a daemon\n"
 "    -p:  Write PID to specified file\n"
 "    -s:  Specify server socket (default 8888)\n"
+"    -F   Run dummy sniffer with dummy data.\n"
         , argv0);
 }
 
@@ -106,7 +107,7 @@ static bool process_options(int *argc, char ***argv)
     bool ok = true;
     while (ok)
     {
-        switch (getopt(*argc, *argv, "+hd:b:vDp:s:"))
+        switch (getopt(*argc, *argv, "+hd:b:vDp:s:F"))
         {
             case 'h':   usage();                                    exit(0);
             case 'd':   fa_sniffer_device = optarg;                 break;
@@ -115,6 +116,7 @@ static bool process_options(int *argc, char ***argv)
             case 'D':   daemon_mode = true;                         break;
             case 'p':   pid_filename = optarg;                      break;
             case 's':   ok = read_int(optarg, &server_socket);      break;
+            case 'F':   fa_sniffer_device = NULL;                   break;
             default:
                 fprintf(stderr, "Try `%s -h` for usage\n", argv0);
                 return false;

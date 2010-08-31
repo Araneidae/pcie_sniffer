@@ -11,22 +11,20 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <pthread.h>
+#include <math.h>
+#include <limits.h>
 
 #include "error.h"
 #include "buffer.h"
 
 #include "sniffer.h"
 
-#define DUMMY_DATA
 
 static pthread_t sniffer_id;
 
 static const char *fa_sniffer_device;
 
 
-#ifdef DUMMY_DATA
-#include <math.h>
-#include <limits.h>
 
 static void dummy_data(void *data, int block_size)
 {
@@ -56,7 +54,7 @@ static void dummy_data(void *data, int block_size)
     usleep(100 * frame_count);
 }
 
-static void * sniffer_thread(void *context)
+static void * dummy_sniffer_thread(void *context)
 {
     while (true)
     {
@@ -66,9 +64,6 @@ static void * sniffer_thread(void *context)
     }
     return NULL;
 }
-
-
-#else
 
 
 static void * sniffer_thread(void *context)
@@ -106,13 +101,13 @@ static void * sniffer_thread(void *context)
     return NULL;
 }
 
-#endif
 
 
 bool initialise_sniffer(const char * device_name)
 {
     fa_sniffer_device = device_name;
-    return TEST_0(pthread_create(&sniffer_id, NULL, sniffer_thread, NULL));
+    return TEST_0(pthread_create(&sniffer_id, NULL,
+        device_name == NULL ? dummy_sniffer_thread : sniffer_thread, NULL));
 }
 
 void terminate_sniffer(void)
