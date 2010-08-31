@@ -21,6 +21,7 @@
 #include "mask.h"
 #include "buffer.h"
 #include "reader.h"
+#include "parse.h"
 
 #include "socket_server.h"
 
@@ -63,16 +64,23 @@ static bool process_command(int scon, const char *buf)
 }
 
 
+/* A subscribe request is either S<mask> or SR<raw-mask>. */
+static bool parse_subscription(const char **string, filter_mask_t mask)
+{
+    parse_char(string, 'S');
+    if (parse_char(string, 'R'))
+        return parse_raw_mask(string, mask);
+    else
+        return parse_mask(string, mask);
+}
+
+
 /* A subscription is a command of the form S<mask> where <mask> is a mask
  * specification as described in mask.h.  The default mask is empty. */
 static bool process_subscribe(int scon, const char *buf)
 {
     filter_mask_t mask;
-    /* A subscribe request is either S<mask> or SR<raw-mask>. */
-    bool parse_ok = IF_ELSE(
-        buf[1] == 'R',
-            parse_raw_mask(buf + 2, mask, NULL),
-            parse_mask(buf + 1, mask, NULL));
+    bool parse_ok = DO_PARSE("subscription", parse_subscription, buf, mask);
     if (parse_ok)
     {
         struct reader_state *reader = open_reader(false);

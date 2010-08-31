@@ -23,6 +23,7 @@
 #include "disk_writer.h"
 #include "socket_server.h"
 #include "archiver.h"
+#include "parse.h"
 
 
 #define K               1024
@@ -50,7 +51,7 @@ static char *output_filename = NULL;
  *      kill $(cat $pid_filename)   */
 static char *pid_filename = NULL;
 /* In memory buffer. */
-static unsigned int buffer_size = BUFFER_SIZE;
+static uint32_t buffer_size = BUFFER_SIZE;
 /* Socket used for serving remote connections. */
 static int server_socket = 8888;
 /* True if archiving to disk, false if only serving live subscription data. */
@@ -75,31 +76,6 @@ static void usage(void)
         , argv0);
 }
 
-static bool read_size(const char *string, unsigned int *result)
-{
-    char *end;
-    *result = strtoul(string, &end, 0);
-    if (TEST_OK_(end > string, "Nothing specified for option")) {
-        switch (*end) {
-            case 'K':   end++;  *result *= K;           break;
-            case 'M':   end++;  *result *= K * K;       break;
-            case '\0':  break;
-        }
-        return TEST_OK_(*end == '\0',
-            "Unexpected characters in integer \"%s\"", string);
-    } else
-        return false;
-}
-
-
-static bool read_int(const char *string, int *result)
-{
-    char *end;
-    *result = strtol(string, &end, 10);
-    return TEST_OK_(end > string  &&  *end == 0,
-        "Malformed number: \"%s\"", string);
-}
-
 
 static bool process_options(int *argc, char ***argv)
 {
@@ -111,12 +87,18 @@ static bool process_options(int *argc, char ***argv)
         {
             case 'h':   usage();                                    exit(0);
             case 'd':   fa_sniffer_device = optarg;                 break;
-            case 'b':   ok = read_size(optarg, &buffer_size);       break;
             case 'v':   verbose_logging(true);                      break;
             case 'D':   daemon_mode = true;                         break;
             case 'p':   pid_filename = optarg;                      break;
-            case 's':   ok = read_int(optarg, &server_socket);      break;
             case 'F':   fa_sniffer_device = NULL;                   break;
+            case 'b':
+                ok = DO_PARSE("buffer size",
+                    parse_size32, optarg, &buffer_size);
+                break;
+            case 's':
+                ok = DO_PARSE("server socket",
+                    parse_int, optarg, &server_socket);
+                break;
             default:
                 fprintf(stderr, "Try `%s -h` for usage\n", argv0);
                 return false;

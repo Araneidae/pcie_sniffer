@@ -19,6 +19,7 @@
 #include "sniffer.h"
 #include "mask.h"
 #include "matlab.h"
+#include "parse.h"
 
 
 #define BUFFER_SIZE     (1 << 16)
@@ -59,26 +60,12 @@ static void usage(void)
 }
 
 
-static bool parse_int(const char *string, int *result)
+static bool parse_samples(const char **string, unsigned int *result)
 {
-    char *end;
-    *result = strtol(string, &end, 10);
-    return TEST_OK_(end > string  &&  *end == 0,
-        "Malformed number: \"%s\"", string);
-}
-
-
-static bool parse_samples(const char *string, unsigned int *result)
-{
-    char *end;
-    *result = strtoul(string, &end, 10);
-    if (end > string  &&  *end == 's')
-    {
-        *result *= 10072;       // Convert seconds to samples
-        end ++;
-    }
-    return TEST_OK_(end > string  &&  *end == 0,
-        "Malformed number: \"%s\"", string);
+    bool ok = parse_uint(string, result);
+    if (ok  &&  parse_char(string, 's'))
+        *result *= 10072;
+    return ok;
 }
 
 
@@ -90,10 +77,15 @@ static bool parse_opts(int *argc, char ***argv)
         switch (getopt(*argc, *argv, "+hp:n:Mo:"))
         {
             case 'h':   usage();                                    exit(0);
-            case 'p':   ok = parse_int(optarg, &port);              break;
-            case 'n':   ok = parse_samples(optarg, &sample_count);  break;
             case 'M':   matlab_format = true;                       break;
             case 'o':   output_filename = optarg;                   break;
+            case 'p':
+                ok = DO_PARSE("server port", parse_int, optarg, &port);
+                break;
+            case 'n':
+                ok = DO_PARSE("sample count",
+                    parse_samples, optarg, &sample_count);
+                break;
             default:
                 fprintf(stderr, "Try `capture -h` for usage\n");
                 return false;
@@ -114,7 +106,7 @@ static bool parse_args(int argc, char **argv)
         TEST_OK_(argc == 2,
             "Wrong number of arguments.  Try `capture -h` for help.")  &&
         DO_(server_name = argv[0])  &&
-        parse_mask(argv[1], mask, NULL);
+        DO_PARSE("capture mask", parse_mask, argv[1], mask);
 }
 
 

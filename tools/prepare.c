@@ -18,6 +18,7 @@
 #include "mask.h"
 #include "transform.h"
 #include "disk.h"
+#include "parse.h"
 
 
 
@@ -71,38 +72,6 @@ static void usage(void)
 }
 
 
-static bool read_size_64(const char *string, uint64_t *size)
-{
-    char *end;
-    *size = strtoll(string, &end, 0);
-    if (!TEST_OK_(end > string, "Size \"%s\" is not a number", string))
-        return false;
-    switch (*end)
-    {
-        case 'K':   *size <<= 10;  end ++;  break;
-        case 'M':   *size <<= 20;  end ++;  break;
-        case 'G':   *size <<= 30;  end ++;  break;
-        case 'T':   *size <<= 40;  end ++;  break;
-    }
-    return TEST_OK_(*end == '\0', "Malformed size \"%s\"", string);
-}
-
-
-static bool read_size_32(const char *string, uint32_t *size)
-{
-    char *end;
-    *size = strtol(string, &end, 0);
-    if (!TEST_OK_(end > string, "Size \"%s\" is not a number", string))
-        return false;
-    switch (*end)
-    {
-        case 'K':   *size <<= 10;  end ++;  break;
-        case 'M':   *size <<= 20;  end ++;  break;
-    }
-    return TEST_OK_(*end == '\0', "Malformed size \"%s\"", string);
-}
-
-
 static bool process_opts(int *argc, char ***argv)
 {
     argv0 = (*argv)[0];
@@ -115,20 +84,24 @@ static bool process_opts(int *argc, char ***argv)
                 usage();
                 exit(0);
             case 's':
-                ok = read_size_64(optarg, &file_size);
+                ok = DO_PARSE("file size", parse_size64, optarg, &file_size);
                 file_size_given = true;
                 break;
             case 'I':
-                ok = read_size_32(optarg, &input_block_size);
+                ok = DO_PARSE("input block size",
+                    parse_size32, optarg, &input_block_size);
                 break;
             case 'O':
-                ok = read_size_32(optarg, &output_block_size);
+                ok = DO_PARSE("output block size",
+                    parse_size32, optarg, &output_block_size);
                 break;
             case 'd':
-                ok = read_size_32(optarg, &first_decimation);
+                ok = DO_PARSE("first decimation",
+                    parse_size32, optarg, &first_decimation);
                 break;
             case 'D':
-                ok = read_size_32(optarg, &second_decimation);
+                ok = DO_PARSE("second decimation",
+                    parse_size32, optarg, &second_decimation);
                 break;
             case '?':
             default:
@@ -149,7 +122,7 @@ static bool process_args(int argc, char **argv)
     return
         process_opts(&argc, &argv)  &&
         TEST_OK_(argc == 2, "Try -h for usage")  &&
-        parse_mask(argv[0], archive_mask, NULL)  &&
+        DO_PARSE("capture mask", parse_mask, argv[0], archive_mask)  &&
         DO_(file_name = argv[1]);
 }
 

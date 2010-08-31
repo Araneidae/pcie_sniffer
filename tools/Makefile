@@ -39,6 +39,7 @@ archiver_SRCS += socket_server.c
 archiver_SRCS += mask.c
 archiver_SRCS += transform.c
 archiver_SRCS += reader.c
+archiver_SRCS += parse.c
 
 read_SRCS += read.c
 read_SRCS += error.c
@@ -50,11 +51,13 @@ prepare_SRCS += prepare.c
 prepare_SRCS += error.c
 prepare_SRCS += disk.c
 prepare_SRCS += mask.c
+prepare_SRCS += parse.c
 
 capture_SRCS += capture.c
 capture_SRCS += error.c
 capture_SRCS += mask.c
 capture_SRCS += matlab.c
+capture_SRCS += parse.c
 
 
 all: $(BUILD)

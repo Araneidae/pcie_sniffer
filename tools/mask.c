@@ -19,6 +19,7 @@
 
 #include "error.h"
 #include "sniffer.h"
+#include "parse.h"
 
 #include "mask.h"
 
@@ -51,90 +52,54 @@ void print_raw_mask(FILE *out, filter_mask_t mask)
 
 
 
-static bool read_id(const char *original, const char **string, int *id)
+static bool parse_id(const char **string, int *id)
 {
-    char *next;
-    *id = strtol(*string, &next, 0);
     return
-        TEST_OK_(next > *string,
-            "Number missing at \"%s\" (+%d)",
-            original, (int) (*string - original))  &&
-        DO_(*string = next)  &&
+        parse_int(string, id)  &&
         TEST_OK_(0 <= *id  &&  *id < FA_ENTRY_COUNT, "id %d out of range", *id);
 }
 
 
-/* Checks whether a string has been fully parsed.  If no end pointer is
- * specified, then the string must be consumed or an error is generated, but if
- * an end pointer is given then the string is merely assigned to it. */
-static bool test_end(const char *original, const char *string, const char **end)
+bool parse_mask(const char **string, filter_mask_t mask)
 {
-    if (end)
-    {
-        *end = string;
-        return true;
-    }
-    else
-        return
-            TEST_OK_(*string == '\0',
-                "Unexpected characters at \"%s\" (+%d)",
-                original, (int) (string - original));
-}
-
-
-bool parse_mask(const char *string, filter_mask_t mask, const char **end)
-{
-    const char *original = string;    // Just for error reporting
     memset(mask, 0, sizeof(filter_mask_t));
 
     bool ok = true;
-    while (ok)
-    {
+    do {
         int id;
-        ok = read_id(original, &string, &id);
+        ok = parse_id(string, &id);
         if (ok)
         {
-            if (*string == '-')
-            {
-                string ++;
-                int end_id;
-                ok = read_id(original, &string, &end_id)  &&
+            int end_id = id;
+            if (parse_char(string, '-'))
+                ok = parse_id(string, &end_id)  &&
                     TEST_OK_(id <= end_id, "Range %d-%d is empty", id, end_id);
-                for (int i = id; ok  &&  i <= end_id; i ++)
-                    set_mask_bit(mask, i);
-            }
-            else
-                set_mask_bit(mask, id);
+            for (int i = id; ok  &&  i <= end_id; i ++)
+                set_mask_bit(mask, i);
         }
+    } while (parse_char(string, ','));
 
-        if (*string != ',')
-            break;
-        string ++;
-    }
-
-    return ok  &&  test_end(original, string, end);
+    return ok;
 }
 
 
-bool parse_raw_mask(const char *string, filter_mask_t mask, const char **end)
+bool parse_raw_mask(const char **string, filter_mask_t mask)
 {
-    const char *original = string;
     memset(mask, 0, sizeof(filter_mask_t));
     int count = FA_ENTRY_COUNT / 4;                 // 4 bits per nibble
     for (int i = count - 1; i >= 0; i --)
     {
-        char ch = *string++;
+        char ch = *(*string)++;
         int nibble;
         if ('0' <= ch  &&  ch <= '9')
             nibble = ch - '0';
         else if ('A' <= ch  &&  ch <= 'F')
             nibble = ch - 'A' + 10;
         else
-            return TEST_OK_(false,
-                "Unexpected character in mask at offset %d", count - i);
+            return TEST_OK_(false, "Unexpected character in mask");
         mask[i / 8] |= nibble << (4 * (i % 8));     // 8 nibbles per word
     }
-    return test_end(original, string, end);
+    return true;
 }
 
 
