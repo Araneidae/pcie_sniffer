@@ -91,7 +91,7 @@ static void process_subscribe(int scon, char *buf, ssize_t rx)
         bool ok = true;
         while (ok)
         {
-            void *block = get_read_block(reader, NULL, NULL);
+            const void *block = get_read_block(reader, NULL, NULL);
             ok = TEST_OK(block != NULL);
             if (ok)
             {

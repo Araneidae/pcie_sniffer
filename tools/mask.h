@@ -3,6 +3,10 @@
 /* Bit mask of BPM ids, array of 256 bits. */
 typedef uint32_t filter_mask_t[FA_ENTRY_COUNT/32];
 
+static inline void copy_mask(filter_mask_t dest, filter_mask_t src)
+{
+    memcpy(dest, src, sizeof(filter_mask_t));
+}
 
 static inline void set_mask_bit(filter_mask_t mask, int bit)
 {
@@ -44,8 +48,8 @@ bool parse_raw_mask(const char *string, filter_mask_t mask);
  * of bytes copied into the target buffer (will be 8*count_mask_bits(mask)).
  * 'from' should point to a completely populated frame, 'to' will contain X,Y
  * pairs in ascending numerical order for bits set in mask. */
-int copy_frame(void *to, void *from, filter_mask_t mask);
+int copy_frame(void *to, const void *from, filter_mask_t mask);
 
 /* Writes the selected number of masked frames to the given file, returning
  * false if writing fails. */
-bool write_frames(int file, filter_mask_t mask, void *frame, int count);
+bool write_frames(int file, filter_mask_t mask, const void *frame, int count);

@@ -123,9 +123,9 @@ bool parse_raw_mask(const char *string, filter_mask_t mask)
 }
 
 
-int copy_frame(void *to, void *from, filter_mask_t mask)
+int copy_frame(void *to, const void *from, filter_mask_t mask)
 {
-    int32_t *from_p = from;
+    const int32_t *from_p = from;
     int32_t *to_p = to;
     int copied = 0;
     for (size_t i = 0; i < sizeof(filter_mask_t) / 4; i ++)
@@ -146,7 +146,7 @@ int copy_frame(void *to, void *from, filter_mask_t mask)
 }
 
 
-bool write_frames(int file, filter_mask_t mask, void *frame, int count)
+bool write_frames(int file, filter_mask_t mask, const void *frame, int count)
 {
     int out_frame_size = count_mask_bits(mask) * FA_ENTRY_SIZE;
     while (count > 0)

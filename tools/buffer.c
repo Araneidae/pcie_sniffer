@@ -154,7 +154,7 @@ void close_reader(struct reader_state *reader)
 }
 
 
-void * get_read_block(
+const void * get_read_block(
     struct reader_state *reader, int *backlog, struct timespec *ts)
 {
     void *buffer;

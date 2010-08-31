@@ -45,7 +45,7 @@ void close_reader(struct reader_state *reader);
  * before calling get_read_block() again.
  *    If ts is not NULL then on a successful block read the timestamp of the
  * returned data is written to *ts. */
-void * get_read_block(
+const void * get_read_block(
     struct reader_state *reader, int *backlog, struct timespec *ts);
 /* Releases the write block.  If false is returned then the block was
  * overwritten while locked due to reader underrun; however, if the reader was
