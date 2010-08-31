@@ -206,10 +206,13 @@ class decimation:
 
 class mode_raw(mode_common):
     mode_name = 'Raw Signal'
+    xname = 'Time'
     yname = 'Position'
+    xshortname = 't'
     yunits = micrometre
     xscale = Qwt5.QwtLinearScaleEngine
     yscale = Qwt5.QwtLinearScaleEngine
+    xticks = 5
     xmin = 0
     ymin = -10
     ymax = 10
@@ -244,11 +247,9 @@ class mode_raw(mode_common):
     def set_timebase(self, timebase):
         self.timebase = timebase
         if timebase <= 10000:
-            self.xname = 'Time'
             self.xunits = 'ms'
             self.scale = 1e3
         else:
-            self.xname = 'Time'
             self.xunits = 's'
             self.scale = 1.0
         self.xmax = self.scale / F_S * timebase
@@ -315,10 +316,12 @@ class mode_fft(mode_common):
     mode_name = 'FFT'
     xname = 'Frequency'
     yname = 'Amplitude'
+    xshortname = 'f'
     xunits = 'kHz'
     yunits = '%s/%sHz' % (micrometre, char_sqrt)
     xscale = Qwt5.QwtLinearScaleEngine
     yscale = Qwt5.QwtLog10ScaleEngine
+    xticks = 5
     xmin = 0
     xmax = 1e-3 * F_S / 2
     ymin = 1e-4
@@ -387,10 +390,12 @@ class mode_fft_logf(mode_common):
     mode_name = 'FFT (log f)'
     xname = 'Frequency'
     yname = 'Amplitude %s freq' % char_times
+    xshortname = 'f'
     xunits = 'Hz'
     yunits = '%s%s%sHz' % (micrometre, char_cdot, char_sqrt)
     xscale = Qwt5.QwtLog10ScaleEngine
     yscale = Qwt5.QwtLog10ScaleEngine
+    xticks = 10
     xmax = F_S / 2
     ymin = 1e-3
     ymax = 100
@@ -445,10 +450,12 @@ class mode_integrated(mode_common):
     mode_name = 'Integrated'
     xname = 'Frequency'
     yname = 'Cumulative amplitude'
+    xshortname = 'f'
     xunits = 'Hz'
     yunits = micrometre
     xscale = Qwt5.QwtLog10ScaleEngine
     yscale = Qwt5.QwtLog10ScaleEngine
+    xticks = 10
     xmax = F_S / 2
     ymin = 1e-3
     ymax = 10
@@ -560,10 +567,8 @@ class Viewer:
 
         ui.channel_id.setValidator(QtGui.QIntValidator(0, 255, ui))
 
-        ui.position_x = QtGui.QLabel('X:     ', ui.statusbar)
-        ui.position_y = QtGui.QLabel('Y:     ', ui.statusbar)
-        ui.statusbar.addPermanentWidget(ui.position_x)
-        ui.statusbar.addPermanentWidget(ui.position_y)
+        ui.position_xy = QtGui.QLabel('', ui.statusbar)
+        ui.statusbar.addPermanentWidget(ui.position_xy)
         ui.status_message = QtGui.QLabel('', ui.statusbar)
         ui.statusbar.addWidget(ui.status_message)
 
@@ -724,8 +729,10 @@ class Viewer:
     def mouse_move(self, pos):
         x = self.plot.invTransform(Qwt5.QwtPlot.xBottom, pos.x())
         y = self.plot.invTransform(Qwt5.QwtPlot.yLeft, pos.y())
-        self.ui.position_x.setText('X: %8.4g %s' % (x, self.mode.xunits))
-        self.ui.position_y.setText('Y: %8.4g %s' % (y, self.mode.yunits))
+        self.ui.position_xy.setText(
+            '%s: %.4g %s, Y: %.4g %s' % (
+                self.mode.xshortname, x, self.mode.xunits,
+                y, self.mode.yunits))
 
 
     # --------------------------------------------------------------------------
@@ -737,6 +744,7 @@ class Viewer:
             self.mode.rescale(value)
             self.plot.setAxisScale(
                 Qwt5.QwtPlot.yLeft, self.mode.ymin, self.mode.ymax)
+            self.zoom.setZoomBase()
         self.plot.replot()
 
     def on_eof(self, message):
@@ -769,6 +777,7 @@ class Viewer:
             y, '%s (%s)' % (self.mode.yname, self.mode.yunits))
         self.plot.setAxisScaleEngine(x, self.mode.xscale())
         self.plot.setAxisScaleEngine(y, self.mode.yscale())
+        self.plot.setAxisMaxMinor(x, self.mode.xticks)
         self.plot.setAxisScale(x, self.mode.xmin, self.mode.xmax)
         self.plot.setAxisScale(y, self.mode.ymin, self.mode.ymax)
         self.zoom.setZoomBase()
