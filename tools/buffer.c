@@ -11,9 +11,11 @@
 #include <errno.h>
 #include <malloc.h>
 #include <pthread.h>
+#include <time.h>
 
 #include "list.h"
 #include "error.h"
+#include "sniffer.h"
 
 #include "buffer.h"
 
@@ -21,8 +23,18 @@
 size_t fa_block_size;               // Bytes in one buffer block
 
 static size_t block_count;          // Number of blocks in buffer
+/* Note that the frame buffer needs to be page aligned to work nicely with
+ * unbuffered direct disk IO. */
 static void * frame_buffer;         // In RAM buffer of captured FA frames
-static bool * gap_buffer;           // Records gaps in frame buffer
+
+struct frame_info {
+    /* True if this frame is a gap and contains no true data, false if the
+     * associated frame in frame_buffer[] is valid. */
+    bool gap;
+    /* Timestamp for completion of this frame. */
+    struct timespec ts;
+};
+static struct frame_info * frame_info;
 
 static size_t buffer_index_in = 0;  // Write pointer, in blocks
 
@@ -142,7 +154,8 @@ void close_reader(struct reader_state *reader)
 }
 
 
-void * get_read_block(struct reader_state *reader, int *backlog)
+void * get_read_block(
+    struct reader_state *reader, int *backlog, struct timespec *ts)
 {
     void *buffer;
     LOCK();
@@ -165,7 +178,7 @@ void * get_read_block(struct reader_state *reader, int *backlog)
             wait(&in_signal);
         if (!reader->running)
             buffer = NULL;
-        else if (gap_buffer[reader->index_out])
+        else if (frame_info[reader->index_out].gap)
         {
             /* Nothing to actually read at this point, just return gap
              * indicator instead. */
@@ -173,7 +186,11 @@ void * get_read_block(struct reader_state *reader, int *backlog)
             advance_index(&reader->index_out);
         }
         else
+        {
             buffer = get_buffer(reader->index_out);
+            if (ts)
+                *ts = frame_info[reader->index_out].ts;
+        }
     }
 
     if (backlog)
@@ -208,9 +225,50 @@ bool release_read_block(struct reader_state *reader)
 
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+/* Frame rate computation.                                                   */
+
+#define NOMINAL_FRAME_RATE      10072.0
+static double mean_frame_rate = NOMINAL_FRAME_RATE;
+static struct timespec last_ts;
+static bool last_ts_valid;
+#define FRAME_RATE_IIR      1e-3
+
+double get_mean_frame_rate(void)
+{
+    return mean_frame_rate;
+}
+
+static void update_mean_frame_rate(bool valid, struct timespec *ts)
+{
+    /* Only update the frame rate when we have a valid interval, and don't
+     * reset it across a gap as the old mean is likely to be good. */
+    if (valid && last_ts_valid)
+    {
+        /* Work out the frame rate from the last timestamp.  We can safely
+         * assume that both timestamps are within a second of each other (if
+         * not there's a much more serious problem elsewhere, and we really
+         * don't care here!) */
+        long nsec = ts->tv_nsec - last_ts.tv_nsec;
+        if (nsec < 0)
+            nsec += 1000000000;
+        int frame_count = fa_block_size / FA_FRAME_SIZE;
+        double frame_rate = 1e9 * frame_count / nsec;
+
+        mean_frame_rate =
+            (1 - FRAME_RATE_IIR) * mean_frame_rate +
+            FRAME_RATE_IIR * frame_rate;
+    }
+
+    last_ts = *ts;
+    last_ts_valid = valid;
+}
+
+
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 /* Writer routines.                                                          */
 
-static bool in_gap = false;         // Used to coalesce repeated gaps
+static bool in_gap = true;         // Used to coalesce repeated gaps
 
 /* Checks for the presence of a blocking reserved reader. */
 static bool blocking_readers(void)
@@ -245,8 +303,16 @@ void release_write_block(bool gap)
         return;
     in_gap = gap;
 
+    /* Get the time this block was written.  This is close enough to the
+     * completion of the FA sniffer read to be a good timestamp for the last
+     * frame. */
+    struct timespec ts;
+    ASSERT_IO(clock_gettime(CLOCK_REALTIME, &ts));
+    update_mean_frame_rate(!gap, &ts);
+
     LOCK();
-    gap_buffer[buffer_index_in] = gap;
+    frame_info[buffer_index_in].gap = gap;
+    frame_info[buffer_index_in].ts = ts;
     advance_index(&buffer_index_in);
 
     /* Let all readers know if they've suffered an underflow. */
@@ -277,5 +343,5 @@ bool initialise_buffer(size_t _block_size, size_t _block_count)
         /* The frame buffer must be page aligned, because we're going to write
          * to disk with direct I/O. */
         TEST_NULL(frame_buffer = valloc(block_count * fa_block_size))  &&
-        TEST_NULL(gap_buffer   = malloc(block_count * sizeof(bool)));
+        TEST_NULL(frame_info = malloc(block_count * sizeof(struct frame_info)));
 }

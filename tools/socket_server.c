@@ -38,6 +38,7 @@ static void process_http(int scon, char *buf, ssize_t rx)
 /* We provide a very limited set of commands:
  *  CQ      Closes archive server
  *  CS      Prints a simple status report
+ *  CF      Returns current sample frequency
  */
 static void process_command(int scon, char *buf, ssize_t rx)
 {
@@ -52,6 +53,13 @@ static void process_command(int scon, char *buf, ssize_t rx)
             case 'S':
                 write_string(scon, "status not implemented\n");
                 break;
+            case 'F':
+            {
+                char message[20];
+                sprintf(message, "%f", get_mean_frame_rate());
+                write_string(scon, message);
+                break;
+            }
             default:
                 write_string(scon, "Unknown command\n");
         }
@@ -83,7 +91,7 @@ static void process_subscribe(int scon, char *buf, ssize_t rx)
         bool ok = true;
         while (ok)
         {
-            void *block = get_read_block(reader, NULL);
+            void *block = get_read_block(reader, NULL, NULL);
             ok = TEST_OK(block != NULL);
             if (ok)
             {
@@ -120,6 +128,16 @@ struct command_table {
 static void * process_connection(void *context)
 {
     int scon = (intptr_t) context;
+
+    struct sockaddr_in name;
+    socklen_t namelen = sizeof(name);
+    if (TEST_IO(getpeername(scon, (struct sockaddr *) &name, &namelen)))
+    {
+        uint8_t * ip = (uint8_t *) &name.sin_addr.s_addr;
+        log_message("Connected from %u.%u.%u.%u:%u",
+            ip[0], ip[1], ip[2], ip[3], ntohs(name.sin_port));
+    }
+
     char buf[4096];
     ssize_t rx;
     memset(buf, 0, sizeof(buf));

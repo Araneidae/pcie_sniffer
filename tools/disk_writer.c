@@ -13,6 +13,7 @@
 #include <errno.h>
 #include <pthread.h>
 #include <string.h>
+#include <time.h>
 
 #include "error.h"
 #include "buffer.h"
@@ -153,10 +154,10 @@ static struct reader_state *reader;
 static bool writer_running;
 
 
-static void * get_valid_read_block(bool archiving)
+static void * get_valid_read_block(bool archiving, struct timespec *ts)
 {
     int backlog;
-    void *block = get_read_block(reader, &backlog);
+    void *block = get_read_block(reader, &backlog, ts);
     update_backlog(backlog);
     if (block == NULL)
     {
@@ -170,7 +171,7 @@ static void * get_valid_read_block(bool archiving)
 
         /* Ensure we leave with a valid read block in hand. */
         do {
-            block = get_read_block(reader, &backlog);
+            block = get_read_block(reader, &backlog, ts);
             update_backlog(backlog);
         } while (writer_running && block == NULL);
 
@@ -185,7 +186,8 @@ static void * writer_thread(void *context)
 {
     /* Start by getting the initial data block, ignoring any initial gap.
      * Start a fresh archive block at this point. */
-    void *block = get_valid_read_block(false);
+    struct timespec ts;
+    void *block = get_valid_read_block(false, &ts);
     start_archive_block();
     ASSERT_IO(lseek(disk_fd, data_start + write_offset, SEEK_SET));
 
@@ -203,7 +205,7 @@ static void * writer_thread(void *context)
         update_header(false);
 
         /* Go and get the next block to be written. */
-        block = get_valid_read_block(true);
+        block = get_valid_read_block(true, &ts);
     }
 
     return NULL;

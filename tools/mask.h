@@ -31,8 +31,7 @@ void print_raw_mask(FILE *out, filter_mask_t mask);
  * of comma separated numbers or ranges, where a range is a pair of numbers
  * separated by -.  In other words:
  *
- *  mask = number [ "," mask ] | range [ "," mask ]
- *  range = number "-" number
+ *  mask = id [ "-" id ] [ "," mask ]
  *
  * Prints error message and returns false if parsing fails. */
 bool parse_mask(const char *string, filter_mask_t mask);

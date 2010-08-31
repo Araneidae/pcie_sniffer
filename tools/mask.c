@@ -105,7 +105,7 @@ bool parse_mask(const char *string, filter_mask_t mask)
 bool parse_raw_mask(const char *string, filter_mask_t mask)
 {
     memset(mask, 0, sizeof(filter_mask_t));
-    int count = FA_ENTRY_COUNT / 4;
+    int count = FA_ENTRY_COUNT / 4;                 // 4 bits per nibble
     for (int i = count - 1; i >= 0; i --)
     {
         char ch = *string++;
@@ -117,7 +117,7 @@ bool parse_raw_mask(const char *string, filter_mask_t mask)
         else
             return TEST_OK_(false,
                 "Unexpected character in mask at offset %d", count - i);
-        mask[i / 8] |= nibble << 4 * (i % 8);
+        mask[i / 8] |= nibble << (4 * (i % 8));     // 8 nibbles per word
     }
     return TEST_OK_(*string == '\0', "Unexpected characters after mask");
 }

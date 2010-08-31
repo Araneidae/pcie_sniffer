@@ -67,21 +67,19 @@ class monitor:
 
     def start(self):
         assert not self.running
-        self.connection = falib.connection([self.id], server)
+        self.subscription = falib.subscription([self.id], server=server)
         self.running = True
         self.buffer.reset()
         self.task = cothread.Spawn(self.__monitor)
 
     def stop(self):
-        assert self.running
-        self.running = False
-        self.task.Wait()
-        self.connection.close()
+        if self.running:
+            self.running = False
+            self.task.Wait()
 
     def set_id(self, id):
         running = self.running
-        if running:
-            self.stop()
+        self.stop()
         self.id = id
         if running:
             self.start()
@@ -94,15 +92,21 @@ class monitor:
         self.data_ready = 0
 
     def __monitor(self):
-        try:
-            while self.running:
-                self.buffer.write(self.connection.read(self.read_size)[:,0,:])
+        stop_reason = 'Stopped'
+        while self.running:
+            try:
+                block = self.subscription.read(self.read_size)[:,0,:]
+            except Exception, exception:
+                stop_reason = str(exception)
+                self.running = False
+            else:
+                self.buffer.write(block)
                 self.data_ready += self.read_size
                 if self.data_ready >= self.update_size:
                     self.on_event(self.read())
                     self.data_ready -= self.update_size
-        except Exception, exception:
-            self.on_eof(str(exception))
+        self.subscription.close()
+        self.on_eof(stop_reason)
 
     def read(self):
         '''Can be called at any time to read the most recent buffer.'''
@@ -551,6 +555,7 @@ class Viewer:
 
     '''application class'''
     def __init__(self, ui, server):
+        ui.setupUi(ui)
         self.ui = ui
 
         # make any contents fill the empty frame
@@ -601,8 +606,10 @@ class Viewer:
         ui.channel_group.setCurrentIndex(1)
         ui.channel.setCurrentIndex(0)
         ui.timebase.setCurrentIndex(INITIAL_TIMEBASE)
+
         # Go!
         self.try_start()
+        self.ui.show()
 
     def connect(self, control, signal, action):
         '''Connects a Qt signal from a control to the selected action.'''
@@ -681,14 +688,15 @@ class Viewer:
     def set_channel(self, ix):
         bpm = BPM_list[self.group_index][1][ix]
         self.channel = bpm[1]
+        self.bpm_name = 'BPM: %s (id %d)' % (bpm[0], self.channel)
         self.monitor.set_id(self.channel)
-        self.ui.status_message.setText(
-            'BPM: %s (id %d)' % (bpm[0], self.channel))
+        self.status_message(self.bpm_name)
 
     def set_channel_id(self):
         self.channel = int(self.ui.channel_id.text())
+        self.bpm_name = 'BPM id %d' % self.channel
         self.monitor.set_id(self.channel)
-        self.ui.status_message.setText('BPM id %d' % self.channel)
+        self.status_message(self.bpm_name)
 
     def rescale_graph(self):
         self.mode.rescale(self.monitor.read())
@@ -750,7 +758,7 @@ class Viewer:
     def on_eof(self, message):
         self.ui.run.setCheckState(False)
         self.monitor.stop()
-        self.ui.status_message.setText('FA server disconnected: %s' % message)
+        self.status_message('FA server disconnected: %s' % message)
 
 
     # --------------------------------------------------------------------------
@@ -761,8 +769,9 @@ class Viewer:
             self.monitor.start()
         except Exception, message:
             self.ui.run.setCheckState(False)
-            self.ui.status_message.setText(
-                'Unable to connect to server: %s' % message)
+            self.status_message('Unable to connect to server: %s' % message)
+        else:
+            self.status_message(self.bpm_name)
 
 
     def reset_mode(self):
@@ -787,25 +796,27 @@ class Viewer:
     def redraw(self):
         self.on_data_update(self.monitor.read())
 
+    def status_message(self, message):
+        self.ui.status_message.setText(message)
+
 
 cothread.iqt()
+
+server = falib.DEFAULT_SERVER
+if len(sys.argv) > 1:
+    server = sys.argv[1]
+
+F_S = falib.get_sample_frequency()
+
 
 # Create and show form
 # Would use loadUi, but unfortunately it doesn't work when one of the widgets is
 # a QwtPlot widget, so we end up with this rather complicated approach.
 ui_form, ui_base = uic.loadUiType(
     os.path.join(os.path.dirname(__file__), 'viewer.ui'))
-
 class UI(ui_form, ui_base):
     pass
 
-ui = UI()
-ui.setupUi(ui)
+s = Viewer(UI(), server)
 
-server = falib.DEFAULT_SERVER
-if len(sys.argv) > 1:
-    server = sys.argv[1]
-s = Viewer(ui, server)
-
-ui.show()
 cothread.WaitForQuit()

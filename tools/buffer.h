@@ -42,8 +42,11 @@ void close_reader(struct reader_state *reader);
 /* Blocks until an entire block_size block is available to be read out,
  * returns pointer to data to be read.  If there is a gap in the available
  * data then NULL is returned, and release_write_block() should not be called
- * before calling get_read_block() again. */
-void * get_read_block(struct reader_state *reader, int *backlog);
+ * before calling get_read_block() again.
+ *    If ts is not NULL then on a successful block read the timestamp of the
+ * returned data is written to *ts. */
+void * get_read_block(
+    struct reader_state *reader, int *backlog, struct timespec *ts);
 /* Releases the write block.  If false is returned then the block was
  * overwritten while locked due to reader underrun; however, if the reader was
  * opened with reserved_reader set this is guaranteed not to happen.  Only
@@ -52,6 +55,10 @@ bool release_read_block(struct reader_state *reader);
 /* Permanently halts the reader, interruping any waits in release_read_block()
  * and forcing further calls to get_read_block() to return NULL. */
 void stop_reader(struct reader_state *reader);
+
+
+/* Returns the average frame rate in Hz. */
+double get_mean_frame_rate(void);
 
 
 /* The block size (in bytes) used by the buffer is a global variable

@@ -33,34 +33,55 @@ class connection:
     class EOF(Exception):
         pass
 
-    def __init__(self, mask, server=DEFAULT_SERVER, port=DEFAULT_PORT):
-        self.mask = normalise_mask(mask)
-        self.count = count_mask(self.mask)
-        self.server = server
-        self.port = port
-
+    def __init__(self, server=DEFAULT_SERVER, port=DEFAULT_PORT):
         self.sock = socket.create_connection((server, port))
-        self.sock.send('SR%s' % format_mask(self.mask))
         self.sock.setblocking(0)
         self.buffer = ''
 
-    def read_raw(self, length):
+    def close(self):
+        self.sock.close()
+
+    def recv(self):
+        select.select([self.sock.fileno()], [], [])
+        chunk = self.sock.recv(4096)
+        if not chunk:
+            raise self.EOF('Connection closed by server')
+        return chunk
+
+    def read_block(self, length):
         while len(self.buffer) < length:
-            select.select([self.sock.fileno()], [], [])
-            chunk = self.sock.recv(4096)
-            if not chunk:
-                raise self.EOF('Connection closed by server')
-            self.buffer += chunk
+            self.buffer += self.recv()
         result, self.buffer = self.buffer[:length], self.buffer[length:]
         return result
 
+
+class subscription(connection):
+    def __init__(self, mask, **kargs):
+        connection.__init__(self, **kargs)
+        self.mask = normalise_mask(mask)
+        self.count = count_mask(self.mask)
+
+        self.sock.send('SR%s' % format_mask(self.mask))
+
     def read(self, samples):
-        raw = self.read_raw(8 * samples * self.count)
+        raw = self.read_block(8 * samples * self.count)
         array = numpy.frombuffer(raw, dtype = numpy.int32)
         return array.reshape((samples, self.count, 2))
 
-    def close(self):
-        self.sock.close()
+
+class sample_frequency(connection):
+    def __init__(self, **kargs):
+        connection.__init__(self, **kargs)
+        self.sock.send('CF')
+        self.frequency = float(self.recv())
+
+
+def get_sample_frequency(**kargs):
+    try:
+        return sample_frequency().frequency
+    except:
+        # If get fails fall back to nominal default.
+        return 10072.0
 
 
 if __name__ == '__main__':
@@ -68,7 +89,8 @@ if __name__ == '__main__':
     require('cothread')
     import cothread
     select.select = cothread.select
+    f = sample_frequency()
     import sys
-    c = connection(map(int, sys.argv[1:]))
+    s = subscription(map(int, sys.argv[1:]))
     while True:
-        print numpy.mean(c.read(10000), 0)
+        print numpy.mean(s.read(10000), 0)
