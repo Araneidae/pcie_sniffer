@@ -301,7 +301,6 @@ static void double_decimate_block(void)
      * up the data to be decimated here. */
     const struct decimated_data *input = d_block(0) - header->second_decimation;
     struct decimated_data *output = dd_area + dd_offset;
-    int dd_block_size = header->dd_sample_count * header->major_block_count;
 
     int written = 0;
     for (int id = 0; id < FA_ENTRY_COUNT; id ++)
@@ -310,13 +309,12 @@ static void double_decimate_block(void)
         {
             decimate_decimation(input, output, header->second_decimation);
             input += header->d_sample_count;
-            output += dd_block_size;
+            output += header->dd_total_count;
             written += 1;
         }
     }
 
-    dd_offset = (dd_offset + 1) % (
-        header->dd_sample_count * header->major_block_count);
+    dd_offset = (dd_offset + 1) % header->dd_total_count;
 }
 
 

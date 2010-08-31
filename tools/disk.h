@@ -28,7 +28,7 @@
  * +-------+-------+---------------------------
  * |DD     |DD     |decimated_data
  * |data   |block  +---------------------------
- * |       |       *DD_sample_count*major_block_count
+ * |       |       *dd_total_count
  * |       +-----------------------------------
  * |       *archive_mask_count
  * +-------+-------+-------+-------------------
@@ -52,6 +52,7 @@
  * major_block_count = paramter determined by file store size
  * D_sample_count = major_sample_count / first_decimation
  * DD_sample_count = D_sample_count / second_decimation
+ * dd_total_count = dd_sample_count * major_block_count
  *
  * Note that major_sample_count must be a multiple of the two decimation factors
  * so that all indexing can be done in multiples of major blocks.  Thus the
@@ -80,6 +81,7 @@ struct disk_header {
     uint32_t index_data_size;   // Size of index block
     uint32_t dd_data_size;      // Size of double decimated data area
     uint64_t total_data_size;   // Size of complete file, for check
+    uint32_t dd_total_count;    // Total number of DD samples
 
     /* Parameters describing major data layout. */
     uint32_t major_block_count; // Total number of major blocks

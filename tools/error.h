@@ -45,8 +45,7 @@ void panic_error(const char * filename, int line)
 
 
 /* Default error message for unexpected errors. */
-#define ERROR_MESSAGE   \
-    "Unexpected error at %s:%d", __FILE__, __LINE__
+#define ERROR_MESSAGE       "Unexpected error at %s:%d", __FILE__, __LINE__
 
 /* Tests system calls: -1 => error. */
 #define _COND_IO(expr)                  ((intptr_t) (expr) != -1)
@@ -119,10 +118,8 @@ void panic_error(const char * filename, int line)
 #define ASSERT_write(fd, buf, count) ASSERT_OK(_COND_rw(write, fd, buf, count))
 
 
-/* A couple of tricksy compile time bug checking macros from the kernel. */
-#define BUILD_BUG_ON(condition)         ((void) BUILD_BUG_OR_ZERO(condition))
-#define BUILD_BUG_OR_ZERO(e)            (sizeof(struct { int:-!!(e); }))
-#define COMPILE_ASSERT(condition)       BUILD_BUG_ON(!(condition))
+/* A tricksy compile time bug checking macro modified from the kernel. */
+#define COMPILE_ASSERT(e)           ((void) sizeof(struct { int:-!(e); }))
 
 /* A rather randomly placed helper routine.  This and its equivalents are
  * defined all over the place, but there doesn't appear to be a definitive

@@ -26,7 +26,7 @@
 
 static void write_string(int sock, const char *string)
 {
-    write(sock, string, strlen(string));
+    TEST_write(sock, string, strlen(string));
 }
 
 
@@ -58,7 +58,7 @@ static void process_command(int scon, char *buf, ssize_t rx, size_t buf_size)
             case 'F':
             {
                 char message[20];
-                sprintf(message, "%f", get_mean_frame_rate());
+                sprintf(message, "%f\n", get_mean_frame_rate());
                 write_string(scon, message);
                 break;
             }

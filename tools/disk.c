@@ -101,6 +101,7 @@ bool initialise_header(
     header->index_data_size = index_data_size;
     header->dd_data_start = header->index_data_start + index_data_size;
     header->dd_data_size = dd_data_size;
+    header->dd_total_count = header->dd_sample_count * major_block_count;
     header->major_data_start = header->dd_data_start + dd_data_size;
     header->major_block_count = major_block_count;
     header->total_data_size =
@@ -164,10 +165,13 @@ bool validate_header(struct disk_header *header, uint64_t file_size)
             header->index_data_size,
             "Invalid index block size")  &&
         TEST_OK_(
-            header->major_block_count * header->archive_mask_count *
-                header->dd_sample_count * sizeof(struct decimated_data) <=
-            header->dd_data_size,
-            "invalid DD block size")  &&
+            header->dd_sample_count * header->major_block_count ==
+                header->dd_total_count,
+            "Invalid total DD count")  &&
+        TEST_OK_(
+            header->dd_total_count * header->archive_mask_count *
+                sizeof(struct decimated_data) <= header->dd_data_size,
+            "DD area too small")  &&
 
         /* Check page alignment. */
         page_aligned(header->index_data_size, "index size")  &&
@@ -197,11 +201,6 @@ bool validate_header(struct disk_header *header, uint64_t file_size)
             header->index_data_size >=
             header->major_block_count * sizeof(struct data_index),
             "Index area too small")  &&
-        TEST_OK_(
-            header->dd_data_size >=
-            header->major_block_count * header->archive_mask_count *
-                header->dd_sample_count * sizeof(struct decimated_data),
-            "DD area too small")  &&
 
         /* Major data layout validation. */
         TEST_OK_(
@@ -242,19 +241,24 @@ void print_header(FILE *out, struct disk_header *header)
         "Output block size = %"PRIu32" bytes, %"PRIu32" samples\n"
         "Total size = %"PRIu32" major blocks = %"PRIu32" samples"
             " = %"PRIu64" bytes\n"
-        "Double decimated: %"PRIu32" samples in %"PRIu32" bytes\n",
+        "Index data from %"PRIu64" for %"PRIu32" bytes\n"
+        "DD data starts %"PRIu64" for %"PRIu32" bytes, %"PRIu32" samples\n"
+        "FA+D data from %"PRIu64", %"PRIu32" decimated samples per block\n"
+        "Current index: %"PRIu32"\n",
         header->signature, header->version,
         mask_string,
         header->first_decimation, header->second_decimation,
             header->first_decimation * header->second_decimation,
             header->archive_mask_count,
         header->input_block_size, header->input_block_size / FA_FRAME_SIZE,
-        header->major_sample_count * FA_ENTRY_SIZE,
-            header->major_sample_count,
+        header->major_block_size, header->major_sample_count,
         header->major_block_count,
             header->major_block_count * header->major_sample_count,
             header->total_data_size,
-        header->dd_sample_count, header->dd_data_size);
+        header->index_data_start, header->index_data_size,
+        header->dd_data_start, header->dd_data_size, header->dd_total_count,
+        header->major_data_start, header->d_sample_count,
+        header->current_major_block);
 }
 
 

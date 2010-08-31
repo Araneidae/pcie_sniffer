@@ -20,7 +20,6 @@
 #include "disk.h"
 
 
-#define PROGRESS_INTERVAL   (1 << 8)
 
 /* An experiment shows that a disk block transfer size of 512K is optimal in the
  * sense of being the largest single block transfer size. */
@@ -159,6 +158,8 @@ static bool process_args(int argc, char **argv)
 /*                                                                           */
 /*****************************************************************************/
 
+#define PROGRESS_INTERVAL   16
+
 
 static bool write_new_header(int file_fd)
 {
@@ -179,12 +180,12 @@ static bool write_new_header(int file_fd)
 }
 
 
-static void show_progress(uint64_t n, uint64_t final_n)
+static void show_progress(int n, int final_n)
 {
     const char *progress = "|/-\\";
     if (n % PROGRESS_INTERVAL == 0)
     {
-        printf("%c %9"PRIu64" (%5.2f%%)\r",
+        printf("%c %9d (%5.2f%%)\r",
             progress[(n / PROGRESS_INTERVAL) % 4], n,
             100.0 * (double) n / final_n);
         fflush(stdout);
@@ -198,16 +199,17 @@ static bool fill_zeros(int file_fd)
     void *zeros = valloc(block_size);
     memset(zeros, 0, block_size);
 
-    uint64_t final_n = file_size / block_size;
+    int final_n = file_size / block_size;
+    uint64_t size_left = file_size;
     bool ok = true;
-    for (uint64_t n = 0; ok  &&  file_size >= block_size;
-         file_size -= block_size, n += 1)
+    for (int n = 0; ok  &&  size_left >= block_size;
+         size_left -= block_size, n += 1)
     {
         ok = TEST_write(file_fd, zeros, block_size);
         show_progress(n, final_n);
     }
-    if (ok  &&  file_size > 0)
-        ok = TEST_write(file_fd, zeros, file_size);
+    if (ok  &&  size_left > 0)
+        ok = TEST_write(file_fd, zeros, size_left);
     printf("\n");
     return ok;
 }

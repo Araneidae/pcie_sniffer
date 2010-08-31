@@ -207,6 +207,26 @@ static bool maybe_daemonise(void)
 }
 
 
+static void run_archiver(void)
+{
+    log_message("Started");
+
+    /* Wait for a shutdown signal.  Ignore the signal, instead waiting for
+     * the clean shutdown request. */
+    while (sem_wait(&shutdown_semaphore) == -1  &&  TEST_OK(errno == EINTR))
+        ; /* Repeat wait while we see EINTR. */
+
+    log_message("Shutting down");
+    terminate_server();
+    terminate_sniffer();
+    if (archiving)
+        terminate_disk_writer();
+    if (pid_filename)
+        TEST_IO(unlink(pid_filename));
+    log_message("Shut Down");
+}
+
+
 int main(int argc, char **argv)
 {
     uint32_t input_block_size = DEFAULT_BLOCK_SIZE;
@@ -223,24 +243,8 @@ int main(int argc, char **argv)
         IF_(archiving,
             start_disk_writer())  &&
         initialise_sniffer(fa_sniffer_device)  &&
-        initialise_server(server_socket);
+        initialise_server(server_socket)  &&
+        DO_(run_archiver());
 
-    if (ok)
-    {
-        log_message("Started");
-
-        /* Wait for a shutdown signal.  Ignore the signal, instead waiting for
-         * the clean shutdown request. */
-        while (sem_wait(&shutdown_semaphore) == -1  &&  TEST_OK(errno == EINTR))
-            ; /* Repeat wait while we see EINTR. */
-
-        log_message("Shutting down");
-        terminate_server();
-        terminate_sniffer();
-        if (archiving)
-            terminate_disk_writer();
-        if (pid_filename)
-            TEST_IO(unlink(pid_filename));
-        log_message("Shut Down");
-    }
+    return ok ? 0 : 1;
 }
