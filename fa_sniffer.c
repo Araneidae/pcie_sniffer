@@ -373,7 +373,8 @@ static irqreturn_t fa_sniffer_isr(
 
     int status = fa_hw_status(hw);
     open->fa_sniffer->last_interrupt = status;
-    if (status & FA_STATUS_DATA_OK) {
+    if (status & FA_STATUS_DATA_OK)
+    {
         /* Normal DMA complete interrupt, data in hand is ready: set up the
          * next transfer and let the read know that there's data to read. */
         struct fa_block *filled_block = & open->buffers[filled_ix];
@@ -383,12 +384,14 @@ static irqreturn_t fa_sniffer_isr(
         filled_block->state = fa_block_data;
     }
 
-    if ((status & FA_STATUS_STOPPED) == 0) {
+    if ((status & FA_STATUS_STOPPED) == 0)
+    {
         /* DMA transfer still in progress.  Set up a new DMA buffer. */
         int fresh_ix = step_index(filled_ix, 2);
         struct fa_block *fresh_block = & open->buffers[fresh_ix];
 
-        if (fresh_block->state == fa_block_free) {
+        if (fresh_block->state == fa_block_free)
+        {
             smp_rmb();  // Guards copy_to_user for free block.
             /* Alas on our target system (2.6.18) this function seems to do
              * nothing whatsoever.  Hopefully we'll have a working
@@ -398,14 +401,17 @@ static irqreturn_t fa_sniffer_isr(
             set_dma_buffer(hw, fresh_block->dma);
             fresh_block->state = fa_block_dma;
             open->isr_block_index = step_index(filled_ix, 1);
-        } else
+        }
+        else
             /* Whoops: the next buffer isn't free.  Never mind.  The hardware
              * will stop as soon as the current block is full and we'll get a
              * STOPPED interrupt.  Let the reader consume the current block
              * first. */
             printk(KERN_DEBUG
                 "fa_sniffer: Data buffer overrun in IRQ (%08x)\n", status);
-    } else {
+    }
+    else
+    {
         /* This is the last interrupt.  Let the reader know that there's
          * nothing more coming, and let fa_sniffer_release() know that DMA is
          * over and clean up can complete. */
@@ -444,7 +450,8 @@ static int fa_sniffer_open(struct inode *inode, struct file *file)
 
     /* Prepare the circular buffer. */
     int blk;
-    for (blk = 0; blk < FA_BUFFER_COUNT; blk++) {
+    for (blk = 0; blk < FA_BUFFER_COUNT; blk++)
+    {
         struct fa_block *block = &open->buffers[blk];
         /* We ask for "cache cold" pages just to optimise things, as these
          * pages won't be read without DMA first.  We allocate free pages
@@ -522,7 +529,8 @@ static int fa_sniffer_release(struct inode *inode, struct file *file)
     free_irq(pdev->irq, open);
 
     int blk;
-    for (blk = 0; blk < FA_BUFFER_COUNT; blk++) {
+    for (blk = 0; blk < FA_BUFFER_COUNT; blk++)
+    {
         pci_unmap_single(pdev, open->buffers[blk].dma,
             FA_BLOCK_SIZE, DMA_FROM_DEVICE);
         free_pages((unsigned long) open->buffers[blk].block,
@@ -541,7 +549,8 @@ static ssize_t fa_sniffer_read(
 {
     struct fa_sniffer_open *open = file->private_data;
     size_t copied = 0;
-    while (count > 0) {
+    while (count > 0)
+    {
         /* Wait for data to arrive in the current block.  We can be
          * interrupted by a process signal, or can detect end of input, due
          * to either buffer overrun or communication controller timeout. */
@@ -570,7 +579,8 @@ static ssize_t fa_sniffer_read(
 
         /* If the current block has been consumed then move on to the next
          * block, marking this block as free for the interrupt routine. */
-        if (open->read_offset >= FA_BLOCK_SIZE) {
+        if (open->read_offset >= FA_BLOCK_SIZE)
+        {
             open->read_offset = 0;
             open->read_block_index = step_index(open->read_block_index, 1);
             smp_wmb();  // Guards copy_to_user for block we're freeing
@@ -604,8 +614,10 @@ static unsigned long fa_sniffer_minors;  /* Bit mask of allocated minors */
 static int get_free_minor(unsigned int *minor)
 {
     int bit;
-    for (bit = 0; bit < FA_SNIFFER_MAX_MINORS; bit ++) {
-        if (test_and_set_bit(bit, &fa_sniffer_minors) == 0) {
+    for (bit = 0; bit < FA_SNIFFER_MAX_MINORS; bit ++)
+    {
+        if (test_and_set_bit(bit, &fa_sniffer_minors) == 0)
+        {
             *minor = bit;
             return 0;
         }
