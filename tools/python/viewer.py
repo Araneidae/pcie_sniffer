@@ -562,10 +562,8 @@ class Viewer:
 
     '''application class'''
     def __init__(self, ui, server):
-        ui.setupUi(ui)
         self.ui = ui
 
-        # make any contents fill the empty frame
         self.makeplot()
 
         self.monitor = monitor(
@@ -634,9 +632,13 @@ class Viewer:
 
     def makeplot(self):
         '''set up plotting'''
+        # make any contents fill the empty frame
+        self.ui.axes.setLayout(QtGui.QGridLayout(self.ui.axes))
+
         # Draw a plot in the frame.  We do this, rather than defining the
         # QwtPlot object in Qt designer because loadUi then fails!
-        plot = self.ui.plot
+        plot = Qwt5.QwtPlot(self.ui.axes)
+        self.ui.axes.layout().addWidget(plot)
 
         self.plot = plot
         self.cx = self.makecurve(QtCore.Qt.blue)
@@ -808,14 +810,10 @@ if len(sys.argv) > 1:
 F_S = falib.get_sample_frequency(server=server)
 
 
-# Create and show form
-# Would use loadUi, but unfortunately it doesn't work when one of the widgets is
-# a QwtPlot widget, so we end up with this rather complicated approach.
-ui_form, ui_base = uic.loadUiType(
-    os.path.join(os.path.dirname(__file__), 'viewer.ui'))
-class UI(ui_form, ui_base):
-    pass
-
-s = Viewer(UI(), server)
+# create and show form
+ui_viewer = uic.loadUi(os.path.join(os.path.dirname(__file__), 'viewer.ui'))
+ui_viewer.show()
+# Bind code to form
+s = Viewer(ui_viewer, server)
 
 cothread.WaitForQuit()
