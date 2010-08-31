@@ -17,6 +17,8 @@
 #include "error.h"
 #include "buffer.h"
 #include "sniffer.h"
+#include "mask.h"
+#include "transform.h"
 #include "disk.h"
 #include "disk_writer.h"
 #include "socket_server.h"
@@ -175,7 +177,6 @@ static bool initialise_signals(void)
          * orderly shutdown. */
         TEST_IO(sigaction(SIGHUP,  &do_shutdown, NULL))  &&
         TEST_IO(sigaction(SIGINT,  &do_shutdown, NULL))  &&
-        TEST_IO(sigaction(SIGQUIT, &do_shutdown, NULL))  &&
         TEST_IO(sigaction(SIGTERM, &do_shutdown, NULL))  &&
         /* When acting as a server we need to ignore SIGPIPE, of course. */
         TEST_IO(sigaction(SIGPIPE, &do_ignore, NULL));
@@ -208,19 +209,17 @@ static bool maybe_daemonise(void)
 
 int main(int argc, char **argv)
 {
-    struct disk_header *header;
-    uint32_t block_size = DEFAULT_BLOCK_SIZE;
+    uint32_t input_block_size = DEFAULT_BLOCK_SIZE;
     bool ok =
         process_args(argc, argv)  &&
         initialise_signals()  &&
         IF_(archiving,
-            initialise_disk_writer(output_filename, buffer_size, &header)  &&
-            DO_(block_size = header->h.block_size))  &&
+            initialise_disk_writer(output_filename, &input_block_size))  &&
         maybe_daemonise()  &&
         /* All the thread initialisation must be done after daemonising, as of
          * course threads don't survive across the daemon() call!  Alas, this
          * means that many startup errors go into syslog rather than stderr. */
-        initialise_buffer(block_size, buffer_size / block_size)  &&
+        initialise_buffer(input_block_size, buffer_size / input_block_size)  &&
         IF_(archiving,
             start_disk_writer())  &&
         initialise_sniffer(fa_sniffer_device)  &&

@@ -4,8 +4,8 @@
 all:    # Default target comes first!
 
 CFLAGS += -std=gnu99
-CFLAGS += -O2
-# CFLAGS += -g
+# CFLAGS += -O2
+CFLAGS += -g
 
 CFLAGS += -Werror
 CFLAGS += -Wall -Wextra
@@ -15,16 +15,16 @@ CFLAGS += -Wundef
 CFLAGS += -Wshadow
 CFLAGS += -Wcast-align
 CFLAGS += -Wwrite-strings
-CFLAGS += -Wpointer-arith
 CFLAGS += -Wredundant-decls
 CFLAGS += -Wmissing-prototypes
 CFLAGS += -Wmissing-declarations
 CFLAGS += -Wstrict-prototypes
+CFLAGS += -msse
 
 CPPFLAGS += -D_GNU_SOURCE
 CPPFLAGS += -D_FILE_OFFSET_BITS=64
 
-LDFLAGS += -lpthread -lrt
+LDFLAGS += -lpthread -lrt -lm
 
 
 BUILD = archiver read prepare capture
@@ -37,6 +37,7 @@ archiver_SRCS += disk_writer.c
 archiver_SRCS += disk.c
 archiver_SRCS += socket_server.c
 archiver_SRCS += mask.c
+archiver_SRCS += transform.c
 
 read_SRCS += read.c
 read_SRCS += error.c
@@ -47,6 +48,7 @@ read_SRCS += matlab.c
 prepare_SRCS += prepare.c
 prepare_SRCS += error.c
 prepare_SRCS += disk.c
+prepare_SRCS += mask.c
 
 capture_SRCS += capture.c
 capture_SRCS += error.c
@@ -63,5 +65,6 @@ endef
 $(foreach target,$(BUILD),$(eval $(expand_build)))
 
 %.d: %.c
-	set -o pipefail && $(CC) -M $(CPPFLAGS) $< | sed '1s/:/ $@:/' >$@
+	set -o pipefail && $(CC) -M $(CPPFLAGS) $(CFLAGS) $< | \
+            sed '1s/:/ $@:/' >$@
 include $(patsubst %.c,%.d,$(foreach target,$(BUILD),$($(target)_SRCS)))

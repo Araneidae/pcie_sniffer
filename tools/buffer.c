@@ -78,7 +78,7 @@ static void advance_index(size_t *index)
 
 static void * get_buffer(size_t index)
 {
-    return (char *) frame_buffer + index * fa_block_size;
+    return frame_buffer + index * fa_block_size;
 }
 
 

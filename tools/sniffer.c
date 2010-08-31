@@ -17,11 +17,58 @@
 
 #include "sniffer.h"
 
+#define DUMMY_DATA
 
 static pthread_t sniffer_id;
 
 static const char *fa_sniffer_device;
 
+
+#ifdef DUMMY_DATA
+#include <math.h>
+#include <limits.h>
+
+static void dummy_data(void *data, int block_size)
+{
+    static uint32_t dummy_t = 0;
+    struct fa_entry *output = data;
+    unsigned int frame_count = block_size / FA_FRAME_SIZE;
+    for (unsigned int i = 0; i < frame_count; i ++)
+    {
+        for (int j = 0; j < FA_ENTRY_COUNT; j ++)
+        {
+            if (j == 0)
+            {
+                output->x = dummy_t;
+                output->y = dummy_t;
+            }
+            else
+            {
+                uint32_t int_phase = dummy_t * j * 7000;
+                double phase = 2 * M_PI * int_phase / (double) ULONG_MAX;
+                output->x = (int32_t) 5000 * sin(phase);
+                output->y = (int32_t) 5000 * cos(phase);
+            }
+            output ++;
+        }
+        dummy_t += 1;
+    }
+    usleep(100 * frame_count);
+}
+
+static void * sniffer_thread(void *context)
+{
+    while (true)
+    {
+        void *buffer = get_write_block();
+        dummy_data(buffer, fa_block_size);
+        release_write_block(false);
+    }
+    return NULL;
+}
+
+
+#else
 
 
 static void * sniffer_thread(void *context)
@@ -58,6 +105,8 @@ static void * sniffer_thread(void *context)
     }
     return NULL;
 }
+
+#endif
 
 
 bool initialise_sniffer(const char * device_name)

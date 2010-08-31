@@ -19,7 +19,7 @@ static inline bool test_mask_bit(filter_mask_t mask, int bit)
 }
 
 /* Returns number of bits set in mask. */
-int count_mask_bits(filter_mask_t mask);
+unsigned int count_mask_bits(filter_mask_t mask);
 
 
 #define RAW_MASK_BYTES  (FA_ENTRY_COUNT / 4)

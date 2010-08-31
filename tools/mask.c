@@ -26,9 +26,9 @@
 #define WRITE_BUFFER_SIZE       (1 << 16)
 
 
-int count_mask_bits(filter_mask_t mask)
+unsigned int count_mask_bits(filter_mask_t mask)
 {
-    int count = 0;
+    unsigned int count = 0;
     for (int bit = 0; bit < FA_ENTRY_COUNT; bit ++)
         if (test_mask_bit(mask, bit))
             count ++;
@@ -39,7 +39,7 @@ int count_mask_bits(filter_mask_t mask)
 int format_raw_mask(filter_mask_t mask, char *buffer)
 {
     for (int i = sizeof(filter_mask_t); i > 0; i --)
-        buffer += sprintf(buffer, "%02X", ((char *) mask)[i - 1]);
+        buffer += sprintf(buffer, "%02X", ((unsigned char *) mask)[i - 1]);
     return 2 * sizeof(filter_mask_t);
 }
 
@@ -156,7 +156,7 @@ bool write_frames(int file, filter_mask_t mask, const void *frame, int count)
         while (count > 0  &&  buffered + out_frame_size <= WRITE_BUFFER_SIZE)
         {
             copy_frame(buffer + buffered, frame, mask);
-            frame = (char *) frame + FA_FRAME_SIZE;
+            frame = frame + FA_FRAME_SIZE;
             buffered += out_frame_size;
             count -= 1;
         }

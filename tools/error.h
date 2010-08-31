@@ -91,15 +91,17 @@ void panic_error(const char * filename, int line)
  * Returns combined success of both actions. */
 #define FINALLY(action, finally) \
     ( { \
-        bool __ok__ = (action); \
-        (finally)  &&  __ok__; \
+        bool __oK__ = (action); \
+        (finally)  &&  __oK__; \
     } )
 
+/* If action fails perform on_fail as a cleanup action.  Returns status of
+ * action. */
 #define UNLESS(action, on_fail) \
     ( { \
-        bool __ok__ = (action); \
-        if (!__ok__) { on_fail; } \
-        __ok__; \
+        bool __oK__ = (action); \
+        if (!__oK__) { on_fail; } \
+        __oK__; \
     } )
 
 
@@ -120,6 +122,7 @@ void panic_error(const char * filename, int line)
 /* A couple of tricksy compile time bug checking macros from the kernel. */
 #define BUILD_BUG_ON(condition)         ((void) BUILD_BUG_OR_ZERO(condition))
 #define BUILD_BUG_OR_ZERO(e)            (sizeof(struct { int:-!!(e); }))
+#define COMPILE_ASSERT(condition)       BUILD_BUG_ON(!(condition))
 
 /* A rather randomly placed helper routine.  This and its equivalents are
  * defined all over the place, but there doesn't appear to be a definitive

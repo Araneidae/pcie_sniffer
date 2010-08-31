@@ -17,6 +17,9 @@
 
 #include "error.h"
 #include "buffer.h"
+#include "sniffer.h"
+#include "mask.h"
+#include "transform.h"
 #include "disk.h"
 
 #include "disk_writer.h"
@@ -24,126 +27,64 @@
 
 static pthread_t writer_id;
 
-static int disk_fd;                 // File descriptor of archive file
-static off64_t data_start, data_size;
-
-
-static struct disk_header header;
-static struct disk_header *header_mmap;
-
 
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-/* Block recording.                                                          */
+/* Disk header and in-ram data.                                              */
+
+/* File handle for writing to disk. */
+static int disk_fd;
+
+/* Memory mapped pointers to in memory data stored on disk. */
+static struct disk_header *header;      // Disk header with basic parameters
+static struct data_index *data_index;   // Index of blocks
+static struct decimated_data *dd_data;  // Double decimated data
 
 
-static off64_t write_offset = 0;    // Where we are in the archive
-static off64_t old_write_offset;
-static int max_backlog = 0;
-
-
-/* The step from old_write_offset to write_offset defines an interval for
- * which we will force the expiry of inter-block gaps.  Each block is
- * described as a half open interval [start, stop), and in all cases we can
- * guarantee that the start is no earlier than old_write_offset, so we want
- * to ensure we expire all intervals with end no later than the new
- * write_offset. */
-static bool expired(off64_t offset)
-{
-    if (write_offset >= old_write_offset)
-        /* Normal case, current write pointer and previous write pointer are
-         * together. */
-        return old_write_offset < offset  &&  offset <= write_offset;
-    else
-        /* Current write pointer has wrapped around since last flush. */
-        return offset <= write_offset  ||  old_write_offset < offset;
-}
-
-/* Flushes old archive segments and updates the end pointer of the oldest block
- * so that it is valid. */
-static void expire_archive_segments(void)
-{
-    /* Expire all older segments that have completely fallen off. */
-    while (header.h.segment_count > 1  &&
-           expired(header.segments[header.h.segment_count - 1].stop_offset))
-        header.h.segment_count -= 1;
-
-    /* If the start of the oldest block has expired then bring it forward. */
-    off64_t *old_start =
-        &header.segments[header.h.segment_count - 1].start_offset;
-    if (expired(*old_start)  ||  *old_start == old_write_offset)
-        *old_start = write_offset;
-    old_write_offset = write_offset;
-}
-
-
-static uint64_t get_now(void)
-{
-    struct timespec ts;
-    ASSERT_IO(clock_gettime(CLOCK_REALTIME, &ts));
-    return (unsigned) ts.tv_sec;
-}
-
-
-/* Updates the file header with the record of a new gap. */
-static void start_archive_block(void)
-{
-    /* Very simple approach, simply push all the existing segments down one and
-     * record our new block at the start. */
-    memmove(&header.segments[1], &header.segments[0],
-        (header.h.max_segment_count - 1) * sizeof(struct segment_record));
-    header.h.segment_count += 1;
-    if (header.h.segment_count > header.h.max_segment_count)
-        header.h.segment_count = header.h.max_segment_count;
-
-    uint64_t now = get_now();
-    header.segments[0].start_sec = now;
-    header.segments[0].stop_sec = now;
-    header.segments[0].start_offset = write_offset;
-    header.segments[0].stop_offset = -1;     // Will be overwritten!
-
-    header.h.disk_status = 1;  // writing
-}
-
-
-static void update_backlog(int backlog)
-{
-    if (backlog > max_backlog)
-        max_backlog = backlog;
-}
-
-
-static void write_header(void)
+static bool lock_disk(void)
 {
     struct flock flock = {
         .l_type = F_WRLCK, .l_whence = SEEK_SET,
-        .l_start = 0, .l_len = sizeof(header)
+        .l_start = 0, .l_len = 0
     };
-
-    ASSERT_IO(fcntl(disk_fd, F_SETLKW, &flock));
-    memcpy(header_mmap, &header, DISK_HEADER_SIZE);
-    ASSERT_IO(msync(header_mmap, DISK_HEADER_SIZE, MS_ASYNC));
-
-    flock.l_type = F_UNLCK;
-    ASSERT_IO(fcntl(disk_fd, F_SETLK, &flock));
+    return TEST_IO_(fcntl(disk_fd, F_SETLK, &flock),
+        "Unable to lock archive for writing: already running?");
 }
 
 
-/* Update header timestamp and write it out if the timestamp has changed.. */
-static void update_header(bool force_write)
+/* Opens and locks the archive for direct IO and maps the three in memory
+ * regions directly into memory.  Returns the configured input block size. */
+bool initialise_disk_writer(const char *file_name, uint32_t *input_block_size)
 {
-    expire_archive_segments();
-    uint64_t now = get_now();
-    if (force_write  ||  now != header.segments[0].stop_sec)
-    {
-        header.h.write_backlog = max_backlog;
-        header.segments[0].stop_sec = now;
-        header.segments[0].stop_offset = write_offset;
-        max_backlog = 0;
-        write_header();
-    }
+    uint64_t disk_size;
+    return
+        TEST_IO_(
+            disk_fd = open(file_name, O_RDWR | O_DIRECT | O_LARGEFILE),
+            "Unable to open archive file \"%s\"", file_name)  &&
+        lock_disk()  &&
+        TEST_IO(
+            header = mmap(NULL, DISK_HEADER_SIZE,
+                PROT_READ | PROT_WRITE, MAP_SHARED, disk_fd, 0))  &&
+        get_filesize(disk_fd, &disk_size)  &&
+        validate_header(header, disk_size)  &&
+        DO_(*input_block_size = header->input_block_size)  &&
+        TEST_IO(
+            data_index = mmap(NULL, header->index_data_size,
+                PROT_READ | PROT_WRITE, MAP_SHARED, disk_fd,
+                header->index_data_start))  &&
+        TEST_IO(
+            dd_data = mmap(NULL, header->dd_data_size,
+                PROT_READ | PROT_WRITE, MAP_SHARED, disk_fd,
+                header->dd_data_start));
 }
 
+static void close_disk(void)
+{
+    ASSERT_IO(munmap(dd_data, header->dd_data_size));
+    ASSERT_IO(munmap(data_index, header->index_data_size));
+    ASSERT_IO(munmap(header, DISK_HEADER_SIZE));
+    ASSERT_IO(close(disk_fd));
+}
 
 
 
@@ -154,60 +95,16 @@ static struct reader_state *reader;
 static bool writer_running;
 
 
-static const void * get_valid_read_block(bool archiving, struct timespec *ts)
-{
-    int backlog;
-    const void *block = get_read_block(reader, &backlog, ts);
-    update_backlog(backlog);
-    if (block == NULL)
-    {
-        /* No data to read.  If we are archiving at this point we'll insert a
-         * break in the data record and then start a new archive block. */
-
-        if (archiving)
-            /* The next read may take some time, ensure the header is up to
-             * date while we're waiting. */
-            update_header(true);
-
-        /* Ensure we leave with a valid read block in hand. */
-        do {
-            block = get_read_block(reader, &backlog, ts);
-            update_backlog(backlog);
-        } while (writer_running && block == NULL);
-
-        if (writer_running && archiving)
-            start_archive_block();
-    }
-    return block;
-}
-
-
 static void * writer_thread(void *context)
 {
-    /* Start by getting the initial data block, ignoring any initial gap.
-     * Start a fresh archive block at this point. */
-    struct timespec ts;
-    const void *block = get_valid_read_block(false, &ts);
-    start_archive_block();
-    ASSERT_IO(lseek(disk_fd, data_start + write_offset, SEEK_SET));
-
     while (writer_running)
     {
-        ASSERT_write(disk_fd, block, fa_block_size);
-        release_read_block(reader);
-
-        write_offset += fa_block_size;
-        if (write_offset >= data_size)
-        {
-            write_offset = 0;
-            ASSERT_IO(lseek(disk_fd, data_start, SEEK_SET));
-        }
-        update_header(false);
-
-        /* Go and get the next block to be written. */
-        block = get_valid_read_block(true, &ts);
+        int backlog;
+        const void *block = get_read_block(reader, &backlog, NULL);
+        process_block(block);
+        if (block)
+            release_read_block(reader);
     }
-
     return NULL;
 }
 
@@ -216,56 +113,13 @@ static void * writer_thread(void *context)
 /* Disk writing initialisation and startup.                                  */
 
 
-static bool process_header(int write_buffer)
-{
-    uint64_t disk_size;
-    bool ok =
-        TEST_IO(
-            header_mmap = mmap(0, DISK_HEADER_SIZE,
-                PROT_READ | PROT_WRITE, MAP_SHARED, disk_fd, 0))  &&
-        get_filesize(disk_fd, &disk_size)  &&
-        validate_header(header_mmap, disk_size);
-    if (ok)
-    {
-        memcpy(&header, header_mmap, DISK_HEADER_SIZE);
-        if (header.h.segment_count > 0)
-            write_offset = header.segments[0].stop_offset;
-        else
-            write_offset = 0;
-        old_write_offset = write_offset;
-        data_size = header.h.data_size;
-        data_start = header.h.data_start;
-
-        header.h.write_buffer = write_buffer;
-    }
-    return ok;
-}
-
-
-static void close_header(void)
-{
-    header.h.disk_status = 0;
-    update_header(true);
-}
-
-
-bool initialise_disk_writer(
-    const char *file_name, int write_buffer, struct disk_header **header_)
-{
-    return
-        TEST_IO_(
-            disk_fd = open(file_name, O_RDWR | O_DIRECT | O_LARGEFILE),
-            "Unable to open archive file \"%s\"", file_name)  &&
-        process_header(write_buffer)  &&
-        DO_(*header_ = &header);
-}
-
-
 bool start_disk_writer(void)
 {
     reader = open_reader(true);
     writer_running = true;
-    return TEST_0(pthread_create(&writer_id, NULL, writer_thread, NULL));
+    return
+        initialise_transform(disk_fd, header, dd_data)  &&
+        TEST_0(pthread_create(&writer_id, NULL, writer_thread, NULL));
 }
 
 
@@ -276,7 +130,7 @@ void terminate_disk_writer(void)
     stop_reader(reader);
     ASSERT_0(pthread_join(writer_id, NULL));
     close_reader(reader);
-    close_header();
+    close_disk();
 
-    log_message("done");
+    log_message("Disk writer done");
 }
