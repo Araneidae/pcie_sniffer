@@ -54,9 +54,11 @@ class buffer:
 
 
 class monitor:
-    def __init__(self, server, on_event, on_eof, buffer_size, read_size):
+    def __init__(self,
+            server, on_event, on_connect, on_eof, buffer_size, read_size):
         self.server = server
         self.on_event = on_event
+        self.on_connect = on_connect
         self.on_eof = on_eof
         self.buffer = buffer(buffer_size)
         self.read_size = read_size
@@ -66,11 +68,15 @@ class monitor:
         self.running = False
 
     def start(self):
-        assert not self.running
-        self.subscription = falib.subscription([self.id], server=server)
-        self.running = True
-        self.buffer.reset()
-        self.task = cothread.Spawn(self.__monitor)
+        assert not self.running, 'Strange: we are already running'
+        try:
+            self.subscription = falib.subscription([self.id], server=server)
+        except Exception, message:
+            self.on_eof('Unable to connect to server: %s' % message)
+        else:
+            self.running = True
+            self.buffer.reset()
+            self.task = cothread.Spawn(self.__monitor)
 
     def stop(self):
         if self.running:
@@ -93,6 +99,7 @@ class monitor:
 
     def __monitor(self):
         stop_reason = 'Stopped'
+        self.on_connect()
         while self.running:
             try:
                 block = self.subscription.read(self.read_size)[:,0,:]
@@ -562,7 +569,8 @@ class Viewer:
         self.makeplot()
 
         self.monitor = monitor(
-            server, self.on_data_update, self.on_eof, 500000, 1000)
+            server, self.on_data_update, self.on_connect, self.on_eof,
+            500000, 1000)
 
         # Prepare the selections in the controls
         ui.timebase.addItems([l[0] for l in Timebase_list])
@@ -603,12 +611,12 @@ class Viewer:
             'currentIndexChanged(int)', self.show_curves)
 
         # Initial control settings: these all trigger GUI related actions.
+        self.channel_ix = 0
         ui.channel_group.setCurrentIndex(1)
-        ui.channel.setCurrentIndex(0)
         ui.timebase.setCurrentIndex(INITIAL_TIMEBASE)
 
         # Go!
-        self.try_start()
+        self.monitor.start()
         self.ui.show()
 
     def connect(self, control, signal, action):
@@ -685,18 +693,19 @@ class Viewer:
             self.ui.channel.setCurrentIndex(-1)
             self.ui.channel.blockSignals(False)
 
+            self.ui.channel.setCurrentIndex(self.channel_ix)
+
     def set_channel(self, ix):
+        self.channel_ix = ix
         bpm = BPM_list[self.group_index][1][ix]
         self.channel = bpm[1]
         self.bpm_name = 'BPM: %s (id %d)' % (bpm[0], self.channel)
         self.monitor.set_id(self.channel)
-        self.status_message(self.bpm_name)
 
     def set_channel_id(self):
         self.channel = int(self.ui.channel_id.text())
         self.bpm_name = 'BPM id %d' % self.channel
         self.monitor.set_id(self.channel)
-        self.status_message(self.bpm_name)
 
     def rescale_graph(self):
         self.mode.rescale(self.monitor.read())
@@ -721,7 +730,7 @@ class Viewer:
 
     def toggle_running(self, running):
         if running:
-            self.try_start()
+            self.monitor.start()
         else:
             self.monitor.stop()
             self.redraw()
@@ -755,24 +764,17 @@ class Viewer:
             self.zoom.setZoomBase()
         self.plot.replot()
 
+    def on_connect(self):
+        self.ui.run.setChecked(True)
+        self.ui.status_message.setText(self.bpm_name)
+
     def on_eof(self, message):
-        self.ui.run.setCheckState(False)
-        self.monitor.stop()
-        self.status_message('FA server disconnected: %s' % message)
+        self.ui.run.setChecked(False)
+        self.ui.status_message.setText('FA server disconnected: %s' % message)
 
 
     # --------------------------------------------------------------------------
     # Handling
-
-    def try_start(self):
-        try:
-            self.monitor.start()
-        except Exception, message:
-            self.ui.run.setCheckState(False)
-            self.status_message('Unable to connect to server: %s' % message)
-        else:
-            self.status_message(self.bpm_name)
-
 
     def reset_mode(self):
         self.mode.set_timebase(self.timebase)
@@ -795,9 +797,6 @@ class Viewer:
 
     def redraw(self):
         self.on_data_update(self.monitor.read())
-
-    def status_message(self, message):
-        self.ui.status_message.setText(message)
 
 
 cothread.iqt()
