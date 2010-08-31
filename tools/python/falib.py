@@ -61,7 +61,7 @@ class subscription(connection):
         self.mask = normalise_mask(mask)
         self.count = count_mask(self.mask)
 
-        self.sock.send('SR%s' % format_mask(self.mask))
+        self.sock.send('SR%s\n' % format_mask(self.mask))
 
     def read(self, samples):
         raw = self.read_block(8 * samples * self.count)
@@ -72,13 +72,13 @@ class subscription(connection):
 class sample_frequency(connection):
     def __init__(self, **kargs):
         connection.__init__(self, **kargs)
-        self.sock.send('CF')
+        self.sock.send('CF\n')
         self.frequency = float(self.recv())
 
 
 def get_sample_frequency(**kargs):
     try:
-        return sample_frequency().frequency
+        return sample_frequency(**kargs).frequency
     except:
         # If get fails fall back to nominal default.
         return 10072.0

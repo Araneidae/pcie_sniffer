@@ -7,6 +7,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "error.h"
 #include "sniffer.h"
 #include "mask.h"
 #include "reader.h"
@@ -28,14 +29,14 @@ struct read_parse {
 
 
 /* */
-static bool parse_request(char *request, struct read_parse *parse)
+static bool parse_request(const char *request, struct read_parse *parse)
 {
-    return false;
+    return TEST_OK_(false, "Read not implemented yet");
 }
 
 
-void process_read(int scon, char *buf, ssize_t rx, size_t buf_size)
+bool process_read(int scon, const char *buf)
 {
     struct read_parse parse;
-    parse_request(buf, &parse);
+    return parse_request(buf, &parse);
 }

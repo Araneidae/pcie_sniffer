@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -24,16 +25,17 @@
 #include "socket_server.h"
 
 
-static void write_string(int sock, const char *string)
+static void __attribute__((format(printf, 2, 3)))
+    write_string(int sock, const char *format, ...)
 {
-    TEST_write(sock, string, strlen(string));
-}
-
-
-static void process_http(int scon, char *buf, ssize_t rx, size_t buf_size)
-{
-    write_string(scon,
-        "HTTP/1.0 200 OK\r\n\r\n<HTML><BODY>Ok!</BODY></HTML>\r\n");
+    va_list args;
+    va_start(args, format);
+    int len = vsnprintf(NULL, 0, format, args);
+    char *buffer = alloca(len + 1);
+    vsnprintf(buffer, len + 1, format, args);
+    if (!TEST_write(sock, buffer, len))
+        log_error("Unable to write \"%s\" to socket %d, error: %s\n",
+            buffer, sock, get_error_message());
 }
 
 
@@ -42,38 +44,28 @@ static void process_http(int scon, char *buf, ssize_t rx, size_t buf_size)
  *  CS      Prints a simple status report
  *  CF      Returns current sample frequency
  */
-static void process_command(int scon, char *buf, ssize_t rx, size_t buf_size)
+static bool process_command(int scon, const char *buf)
 {
-    if (rx >= 2)
+    switch (buf[1])
     {
-        switch (buf[1])
-        {
-            case 'Q':
-                log_message("Shutdown command received");
-                shutdown_archiver();
-                break;
-            case 'S':
-                write_string(scon, "status not implemented\n");
-                break;
-            case 'F':
-            {
-                char message[20];
-                sprintf(message, "%f\n", get_mean_frame_rate());
-                write_string(scon, message);
-                break;
-            }
-            default:
-                write_string(scon, "Unknown command\n");
-        }
+        case 'Q':
+            log_message("Shutdown command received");
+            shutdown_archiver();
+            return true;
+        case 'F':
+            write_string(scon, "%f\n", get_mean_frame_rate());
+            return true;
+        case 'S':
+            return TEST_OK_(false, "Status not implemented");
+        default:
+            return TEST_OK_(false, "Unknown command");
     }
-    else
-        write_string(scon, "Missing command\n");
 }
 
 
 /* A subscription is a command of the form S<mask> where <mask> is a mask
  * specification as described in mask.h.  The default mask is empty. */
-static void process_subscribe(int scon, char *buf, ssize_t rx, size_t buf_size)
+static bool process_subscribe(int scon, const char *buf)
 {
     filter_mask_t mask;
     /* A subscribe request is either S<mask> or SR<raw-mask>. */
@@ -100,25 +92,50 @@ static void process_subscribe(int scon, char *buf, ssize_t rx, size_t buf_size)
         }
         close_reader(reader);
     }
+    return parse_ok;
 }
 
 
-static void process_error(int scon, char *buf, ssize_t rx, size_t buf_size)
+static bool process_error(int scon, const char *buf)
 {
-    write_string(scon, "Invalid command\n");
+    return TEST_OK_(false, "Invalid command");
 }
 
 
 struct command_table {
     char id;            // Identification character
-    void (*process)(int scon, char *buf, ssize_t rx, size_t buf_size);
+    bool (*process)(int scon, const char *buf);
 } command_table[] = {
-    { 'G', process_http },
     { 'C', process_command },
     { 'R', process_read },
     { 'S', process_subscribe },
     { 0,   process_error }
 };
+
+
+/* Reads from the given socket until one of the following is encountered: a
+ * newline (the preferred case), end of input, end of buffer or an error.  The
+ * newline and anything following is discarded. */
+static bool read_line(int sock, char *buf, size_t buflen)
+{
+    ssize_t rx;
+    while (
+        TEST_OK_(buflen > 0, "Read buffer exhausted")  &&
+        TEST_IO(rx = read(sock, buf, buflen))  &&
+        TEST_OK_(rx > 0, "End of file on input"))
+    {
+        char *newline = memchr(buf, '\n', rx);
+        if (newline)
+        {
+            *newline = '\0';
+            return true;
+        }
+
+        buflen -= rx;
+        buf += rx;
+    }
+    return false;
+}
 
 
 static void * process_connection(void *context)
@@ -134,19 +151,22 @@ static void * process_connection(void *context)
             ip[0], ip[1], ip[2], ip[3], ntohs(name.sin_port));
     }
 
+
+    push_error_handling();
     char buf[4096];
-    ssize_t rx;
-    memset(buf, 0, sizeof(buf));
-    if (TEST_IO(rx = read(scon, buf, sizeof(buf) - 1))  &&  rx > 0)
+    if (read_line(scon, buf, sizeof(buf)))
     {
-        buf[rx] = '\0';
-        log_message("Read: \"%.*s\"", (int)rx, buf);
+        log_message("Read: \"%s\"", buf);
         /* Command successfully read, dispatch it to the appropriate handler. */
         struct command_table * command = command_table;
         while (command->id  &&  command->id != buf[0])
             command += 1;
-        command->process(scon, buf, rx, sizeof(buf));
+
+        if (!command->process(scon, buf))
+            write_string(scon, "%s\n", get_error_message());
     }
+    pop_error_handling();
+
     TEST_IO(close(scon));
     return NULL;
 }

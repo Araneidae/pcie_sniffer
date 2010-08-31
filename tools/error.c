@@ -1,5 +1,6 @@
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
 #include <errno.h>
@@ -12,6 +13,63 @@
 /* Fixed on-stack buffers for message logging. */
 #define MESSAGE_LENGTH  512
 
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+/* Local error handling. */
+
+struct error_stack {
+    char *message;
+    struct error_stack *last;
+};
+
+static __thread struct error_stack *error_stack = NULL;
+
+void push_error_handling(void)
+{
+    struct error_stack *new_entry = malloc(sizeof(struct error_stack));
+    new_entry->message = NULL;
+    new_entry->last = error_stack;
+    error_stack = new_entry;
+}
+
+void pop_error_handling(void)
+{
+    struct error_stack *top = error_stack;
+    error_stack = top->last;
+    free(top->message);
+    free(top);
+}
+
+const char * get_error_message(void)
+{
+    return error_stack->message;
+}
+
+void reset_error_message(void)
+{
+    struct error_stack *top = error_stack;
+    free(top->message);
+    top->message = NULL;
+}
+
+
+static bool save_message(const char *message)
+{
+    struct error_stack *top = error_stack;
+    if (top)
+    {
+        top->message = realloc(top->message, strlen(message) + 1);
+        strcpy(top->message, message);
+        return true;
+    }
+    else
+        return false;
+}
+
+
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+/* Error handling and logging. */
 
 /* Determines whether error messages go to stderr or syslog. */
 static bool daemon_mode = false;
@@ -88,7 +146,8 @@ void print_error(const char * message, ...)
         snprintf(error_message + Count, MESSAGE_LENGTH - Count,
             ": (%d) %s", error, strerror_r(error, StrError, sizeof(StrError)));
     }
-    log_error("%s", error_message);
+    if (!save_message(error_message))
+        log_error("%s", error_message);
 }
 
 

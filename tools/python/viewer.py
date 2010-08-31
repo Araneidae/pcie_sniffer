@@ -805,7 +805,7 @@ server = falib.DEFAULT_SERVER
 if len(sys.argv) > 1:
     server = sys.argv[1]
 
-F_S = falib.get_sample_frequency()
+F_S = falib.get_sample_frequency(server=server)
 
 
 # Create and show form
