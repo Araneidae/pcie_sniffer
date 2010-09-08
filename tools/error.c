@@ -9,6 +9,7 @@
 #include <pthread.h>
 
 #include "error.h"
+#include "locking.h"
 
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -92,11 +93,7 @@ char * hprintf(const char *format, ...)
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 /* Error handling and logging. */
 
-pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
-static void lock(void)     { ASSERT_0(pthread_mutex_lock(&log_mutex)); }
-static void unlock(void*_) { ASSERT_0(pthread_mutex_unlock(&log_mutex)); }
-#define LOCK()      lock();  pthread_cleanup_push(unlock, NULL)
-#define UNLOCK()    pthread_cleanup_pop(true)
+DECLARE_LOCKING(lock);
 
 
 /* Determines whether error messages go to stderr or syslog. */
@@ -119,7 +116,7 @@ void start_logging(const char *ident)
 
 void vlog_message(int priority, const char *format, va_list args)
 {
-    LOCK();
+    LOCK(lock);
     if (daemon_mode)
         vsyslog(priority, format, args);
     else
@@ -127,7 +124,7 @@ void vlog_message(int priority, const char *format, va_list args)
         vfprintf(stderr, format, args);
         fprintf(stderr, "\n");
     }
-    UNLOCK();
+    UNLOCK(lock);
 }
 
 void log_message(const char * message, ...)

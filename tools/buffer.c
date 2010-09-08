@@ -16,6 +16,7 @@
 #include "list.h"
 #include "error.h"
 #include "sniffer.h"
+#include "locking.h"
 
 #include "buffer.h"
 
@@ -43,30 +44,7 @@ static size_t buffer_index_in = 0;  // Write pointer, in blocks
 /* Miscellaneous support routines.                                           */
 
 
-pthread_mutex_t buffer_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t in_signal = PTHREAD_COND_INITIALIZER;
-
-static void lock(void)     { ASSERT_0(pthread_mutex_lock(&buffer_mutex)); }
-static void unlock(void*_) { ASSERT_0(pthread_mutex_unlock(&buffer_mutex)); }
-
-/* When using deferred thread cancellation we need to use pthread_cleanup_
- * calls for locking to ensure that when a thread is cancelled we don't end
- * up with the buffer_mutex in an inconsistent state. */
-#define LOCK() \
-    lock(); \
-    pthread_cleanup_push(unlock, NULL)
-#define UNLOCK() \
-    pthread_cleanup_pop(true)
-
-
-static void signal(pthread_cond_t *cond)
-{
-    ASSERT_0(pthread_cond_broadcast(cond));
-}
-static void wait(pthread_cond_t *cond)
-{
-    ASSERT_0(pthread_cond_wait(cond, &buffer_mutex));
-}
+DECLARE_LOCKING(lock);
 
 
 static void advance_index(size_t *index)
@@ -132,12 +110,12 @@ struct reader_state * open_reader(bool reserved_reader)
     reader->running = true;
     INIT_LIST_HEAD(&reader->reserved_entry);
 
-    LOCK();
+    LOCK(lock);
     reader->index_out = buffer_index_in;
     list_add_tail(&reader->list_entry, &all_readers);
     if (reserved_reader)
         list_add_tail(&reader->reserved_entry, &reserved_readers);
-    UNLOCK();
+    UNLOCK(lock);
 
     return reader;
 }
@@ -145,10 +123,10 @@ struct reader_state * open_reader(bool reserved_reader)
 
 void close_reader(struct reader_state *reader)
 {
-    LOCK();
+    LOCK(lock);
     list_del(&reader->list_entry);
     list_del(&reader->reserved_entry);
-    UNLOCK();
+    UNLOCK(lock);
 
     free(reader);
 }
@@ -158,7 +136,7 @@ const void * get_read_block(
     struct reader_state *reader, int *backlog, struct timespec *ts)
 {
     void *buffer;
-    LOCK();
+    LOCK(lock);
     if (reader->underflowed)
     {
         /* If we were underflowed then perform a complete reset of the read
@@ -175,7 +153,7 @@ const void * get_read_block(
         /* If we're on the tail of the writer then we have to wait for a new
          * entry in the buffer. */
         while (reader->running  &&  reader->index_out == buffer_index_in)
-            wait(&in_signal);
+            wait(&lock);
         if (!reader->running)
             buffer = NULL;
         else if (frame_info[reader->index_out].gap)
@@ -198,27 +176,27 @@ const void * get_read_block(
         *backlog = reader->backlog * fa_block_size;
         reader->backlog = 0;
     }
-    UNLOCK();
+    UNLOCK(lock);
     return buffer;
 }
 
 
 void stop_reader(struct reader_state *reader)
 {
-    LOCK();
+    LOCK(lock);
     reader->running = false;
-    signal(&in_signal);
-    UNLOCK();
+    signal(&lock);
+    UNLOCK(lock);
 }
 
 
 bool release_read_block(struct reader_state *reader)
 {
     bool underflow;
-    LOCK();
+    LOCK(lock);
     advance_index(&reader->index_out);
     underflow = reader->underflowed;
-    UNLOCK();
+    UNLOCK(lock);
     return !underflow;
 }
 
@@ -283,7 +261,7 @@ static bool blocking_readers(void)
 void * get_write_block(void)
 {
     void *buffer;
-    LOCK();
+    LOCK(lock);
     if (blocking_readers())
         /* There's a reserved reader not finished with the next block yet.
          * Bail and try again later. */
@@ -291,7 +269,7 @@ void * get_write_block(void)
     else
         /* Normal case, just write into the current in pointer. */
         buffer = get_buffer(buffer_index_in);
-    UNLOCK();
+    UNLOCK(lock);
     return buffer;
 }
 
@@ -310,7 +288,7 @@ void release_write_block(bool gap)
     ASSERT_IO(clock_gettime(CLOCK_REALTIME, &ts));
     update_mean_frame_rate(!gap, &ts);
 
-    LOCK();
+    LOCK(lock);
     frame_info[buffer_index_in].gap = gap;
     frame_info[buffer_index_in].ts = ts;
     advance_index(&buffer_index_in);
@@ -325,8 +303,8 @@ void release_write_block(bool gap)
         else
             update_backlog(reader);
     }
-    signal(&in_signal);
-    UNLOCK();
+    signal(&lock);
+    UNLOCK(lock);
 }
 
 
