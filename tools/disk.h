@@ -90,14 +90,24 @@ struct disk_header {
     uint32_t d_sample_count;    // Decimated samples in a major block
     uint32_t dd_sample_count;   // Double dec samples in a major block
 
-    /* Current major block index. */
-    uint32_t current_major_block;   // This block is being written
+
+    /* All the parameters above remain fixed during the operation of the
+     * archiver, the parameters below are updated dynamically. */
+
+    uint32_t current_major_block; // This block is being written
 };
 
 
 struct data_index {
+    /* The major data blocks are indexed by their timestamp and we record the
+     * duration of the block.  The duration is recorded in microseconds and for
+     * ease of processing we record the timestamp in microseconds in the current
+     * epoch. */
     uint64_t timestamp;
-    bool gap;
+    uint32_t duration;
+    /* Id 0 normally contains a cycle counter, so we also record the id for the
+     * first read value. */
+    uint32_t id_zero;
 };
 
 

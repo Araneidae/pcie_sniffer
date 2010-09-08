@@ -19,7 +19,10 @@
 
 /* Archiver header with core parameter. */
 static struct disk_header *header;
+/* Archiver index. */
+static struct data_index *data_index;
 
+/* Number of samples in a single input block. */
 static int input_frame_count;
 static int input_decimation_count;
 
@@ -72,14 +75,11 @@ static void write_major_block(void)
 {
     off64_t offset = header->major_data_start +
         (off64_t) header->current_major_block * header->major_block_size;
-    header->current_major_block =
-        (header->current_major_block + 1) % header->major_block_count;
 
     schedule_write(offset, buffers[current_buffer], header->major_block_size);
 
-    fa_offset = 0;
-    d_offset = 0;
     current_buffer = 1 - current_buffer;
+    reset_block();
 }
 
 
@@ -295,13 +295,94 @@ static void double_decimate_block(void)
 
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+/* Index maintenance. */
+
+/* Number of timestamps we expect to see in a single major block. */
+static int timestamp_count;
+/* Array of timestamps for timestamp estimation, stored relative to the first
+ * timestamp. */
+static uint64_t first_timestamp;
+static int *timestamp_array;
+/* Current index into the timestamp array as we fill it. */
+static int timestamp_index = 0;
+
+
+/* Adds a minor block to the timestamp array. */
+static void index_minor_block(const void *block, struct timespec *ts)
+{
+    /* Convert timestamp to our working representation in microseconds in the
+     * current epoch. */
+    uint64_t timestamp = 1000000 * (uint64_t) ts->tv_sec + ts->tv_nsec / 1000;
+
+    if (timestamp_index == 0)
+    {
+        first_timestamp = timestamp;
+        /* For the very first index record the first id 0 field. */
+        data_index[header->current_major_block].id_zero =
+            ((struct fa_entry *) block)[0].x;
+    }
+
+    timestamp_array[timestamp_index] = (int) (timestamp - first_timestamp);
+    timestamp_index += 1;
+}
+
+
+/* Called when a major block is complete, complete the index entry. */
+static void advance_index(void)
+{
+    /* Fit a straight line through the timestamps and compute the timestamp at
+     * the beginning of the segment. */
+    int sum_t2 = 0;
+    int64_t sum_x = 0;
+    int64_t sum_xt = 0;
+    for (int i = 0; i < timestamp_count; i ++)
+    {
+        int t = 2*i - timestamp_count + 1;
+        int64_t x = timestamp_array[i];
+        sum_t2 += t * t;
+        sum_xt += x * t;
+        sum_x  += x;
+    }
+
+    struct data_index *ix = &data_index[header->current_major_block];
+    /* Duration is "slope" calculated from fit above over an interval of
+     * 2*timestamp_count. */
+    ix->duration = (uint32_t) (2 * timestamp_count * sum_xt / sum_t2);
+    /* Starting timestamp is computed at t=-timestamp_count-1 from centre. */
+    ix->timestamp = first_timestamp +
+        sum_x / timestamp_count - (timestamp_count + 1) * sum_xt / sum_t2;
+
+    /* All done, advance the block index and reset our index. */
+    header->current_major_block =
+        (header->current_major_block + 1) % header->major_block_count;
+    timestamp_index = 0;
+}
+
+
+/* Discard work so far, called when we see a gap. */
+static void reset_index(void)
+{
+    timestamp_index = 0;
+}
+
+
+static void initialise_index(void)
+{
+    timestamp_count = header->major_sample_count / input_frame_count;
+    timestamp_array = malloc(sizeof(int) * timestamp_count);
+    timestamp_index = 0;
+}
+
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 /* Top level control. */
 
 
-void process_block(const void *block)
+void process_block(const void *block, struct timespec *ts)
 {
     if (block)
     {
+        index_minor_block(block, ts);
         transpose_block(block);
         decimate_block(block);
         bool must_write = advance_block();
@@ -309,27 +390,34 @@ void process_block(const void *block)
                 header->first_decimation * header->second_decimation) == 0)
             double_decimate_block();
         if (must_write)
+        {
             write_major_block();
+            advance_index();
+        }
     }
     else
     {
         /* If we see a gap in the block then discard all the work we've done so
          * far. */
         reset_block();
+        reset_index();
         dd_offset = header->current_major_block * header->dd_sample_count;
     }
 }
 
 
 bool initialise_transform(
-    struct disk_header *header_, struct decimated_data *dd_area_)
+    struct disk_header *header_, struct data_index *data_index_,
+    struct decimated_data *dd_area_)
 {
     header = header_;
+    data_index = data_index_;
     dd_area = dd_area_;
     input_frame_count = header->input_block_size / FA_FRAME_SIZE;
     input_decimation_count = input_frame_count / header->first_decimation;
     dd_offset = header->current_major_block * header->dd_sample_count;
 
     initialise_io_buffer();
+    initialise_index();
     return true;
 }

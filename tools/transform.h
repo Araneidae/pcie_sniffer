@@ -8,9 +8,11 @@ struct decimated_data {
 
 /* Processes a single input block by transposing and decimation.  If a major
  * block is filled then it is also written to disk. */
-void process_block(const void *read_block);
+void process_block(const void *read_block, struct timespec *ts);
 
 
 struct disk_header;
+struct data_index;
 bool initialise_transform(
-    struct disk_header *header, struct decimated_data *dd_area);
+    struct disk_header *header, struct data_index *data_index,
+    struct decimated_data *dd_area);

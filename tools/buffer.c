@@ -9,7 +9,6 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <errno.h>
-#include <malloc.h>
 #include <pthread.h>
 #include <time.h>
 

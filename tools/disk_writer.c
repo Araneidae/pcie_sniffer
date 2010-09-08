@@ -157,9 +157,9 @@ static void * transform_thread(void *context)
 {
     while (writer_running)
     {
-        int backlog;
-        const void *block = get_read_block(reader, &backlog, NULL);
-        process_block(block);
+        struct timespec ts;
+        const void *block = get_read_block(reader, NULL, &ts);
+        process_block(block, &ts);
         if (block)
             release_read_block(reader);
     }
@@ -179,7 +179,7 @@ bool start_disk_writer(void)
     reader = open_reader(true);
     writer_running = true;
     return
-        initialise_transform(header, dd_data)  &&
+        initialise_transform(header, data_index, dd_data)  &&
         TEST_0(pthread_create(&writer_id, NULL, writer_thread, NULL))  &&
         TEST_0(pthread_create(&transform_id, NULL, transform_thread, NULL));
 }
