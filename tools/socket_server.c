@@ -66,11 +66,9 @@ static bool process_command(int scon, const char *buf)
 /* A subscribe request is either S<mask> or SR<raw-mask>. */
 static bool parse_subscription(const char **string, filter_mask_t mask)
 {
-    parse_char(string, 'S');
-    if (parse_char(string, 'R'))
-        return parse_raw_mask(string, mask);
-    else
-        return parse_mask(string, mask);
+    return
+        parse_char(string, 'S')  &&
+        parse_mask(string, mask);
 }
 
 

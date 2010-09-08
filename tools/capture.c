@@ -63,7 +63,7 @@ static void usage(void)
 static bool parse_samples(const char **string, unsigned int *result)
 {
     bool ok = parse_uint(string, result);
-    if (ok  &&  parse_char(string, 's'))
+    if (ok  &&  read_char(string, 's'))
         *result *= 10072;
     return ok;
 }

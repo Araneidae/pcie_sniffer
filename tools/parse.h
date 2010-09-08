@@ -11,17 +11,26 @@ bool parse_int(const char **string, int *result);
 bool parse_uint(const char **string, unsigned int *result);
 bool parse_uint32(const char **string, uint32_t *result);
 bool parse_uint64(const char **string, uint64_t *result);
+bool parse_double(const char **string, double *result);
 
 /* Integer possibly followed by K or M. */
 bool parse_size32(const char **string, uint32_t *result);
 /* Integer possibly followed by K, M, G or T. */
 bool parse_size64(const char **string, uint64_t *result);
 
+/* Parses date and time in ISO format with an optional trailing nanoseconds
+ * part, ie:
+ *      yyyy-mm-ddThh:mm:ss[.nnnnnnnnnn] . */
+struct timespec;
+bool parse_datetime(const char **string, struct timespec *ts);
+
 /* Only succeeds if **string=='\0'. */
 bool parse_end(const char **string);
 
 /* Checks for presence of ch, consumes it if present.  No error is generated if
- * ch is not found, unlike other parse functions. */
+ * ch is not found, unlike the parse functions. */
+bool read_char(const char **string, char ch);
+/* Like read_char(), but generates an error if ch is not found. */
 bool parse_char(const char **string, char ch);
 
 #define DO_PARSE(message, parse, string, result) \
