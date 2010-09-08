@@ -351,6 +351,7 @@ static void advance_index(void)
     /* Starting timestamp is computed at t=-timestamp_count-1 from centre. */
     ix->timestamp = first_timestamp +
         sum_x / timestamp_count - (timestamp_count + 1) * sum_xt / sum_t2;
+    header->last_duration = ix->duration;
 
     /* All done, advance the block index and reset our index. */
     header->current_major_block =

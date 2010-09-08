@@ -13,6 +13,7 @@
 #include <sys/ioctl.h>
 #include <linux/fs.h>
 #include <errno.h>
+#include <math.h>
 
 #include "error.h"
 #include "sniffer.h"
@@ -43,7 +44,8 @@ bool initialise_header(
     uint32_t input_block_size,
     uint32_t output_block_size,
     uint32_t first_decimation,
-    uint32_t second_decimation)
+    uint32_t second_decimation,
+    double sample_frequency)
 {
     uint32_t archive_mask_count = count_mask_bits(archive_mask);
 
@@ -108,6 +110,10 @@ bool initialise_header(
         (uint64_t) major_block_count * header->major_block_size;
 
     header->current_major_block = 0;
+    /* Compute the nominal time, in microseconds, to capture an entire major
+     * block. */
+    header->last_duration = (uint32_t) round(
+        header->major_sample_count * 1e6 / sample_frequency);
 
     errno = 0;      // Suppresses invalid errno report from TEST_OK_ failures
     return
@@ -243,7 +249,7 @@ void print_header(FILE *out, struct disk_header *header)
         "Index data from %"PRIu64" for %"PRIu32" bytes\n"
         "DD data starts %"PRIu64" for %"PRIu32" bytes, %"PRIu32" samples\n"
         "FA+D data from %"PRIu64", %"PRIu32" decimated samples per block\n"
-        "Current index: %"PRIu32"\n",
+        "Last duration: %"PRIu32" us, or %lg Hz.  Current index: %"PRIu32"\n",
         header->signature, header->version,
         mask_string,
         header->first_decimation, header->second_decimation,
@@ -257,7 +263,9 @@ void print_header(FILE *out, struct disk_header *header)
         header->index_data_start, header->index_data_size,
         header->dd_data_start, header->dd_data_size, header->dd_total_count,
         header->major_data_start, header->d_sample_count,
-        header->current_major_block);
+        header->last_duration,
+            1e6 * header->major_sample_count / (double) header->last_duration,
+            header->current_major_block);
 }
 
 

@@ -41,6 +41,7 @@ static uint32_t input_block_size = 512 * K;
 static uint32_t output_block_size = 512 * K;
 static uint32_t first_decimation = 64;
 static uint32_t second_decimation = 256;
+static double sample_frequency = 10072.4;
 
 
 static void usage(void)
@@ -61,13 +62,15 @@ static void usage(void)
 "        the disk's IO block size.  The default value is %"PRIu32".\n"
 "   -d:  Specify first decimation factor.  The default value is %"PRIu32".\n"
 "   -D:  Specify second decimation factor.  The default value is %"PRIu32".\n"
+"   -f:  Specify nominal sample frequency.  The default is %.1gHz\n"
 "\n"
 "File size can be followed by one of K, M, G or T to specify sizes in\n"
 "kilo, mega, giga or terabytes, and similarly block sizes can be followed\n"
 "by one of K or M.\n"
         , argv0,
         input_block_size, output_block_size,
-        first_decimation, second_decimation);
+        first_decimation, second_decimation,
+        sample_frequency);
 }
 
 
@@ -77,7 +80,7 @@ static bool process_opts(int *argc, char ***argv)
     bool ok = true;
     while (ok)
     {
-        switch (getopt(*argc, *argv, "+hs:I:O:d:D:"))
+        switch (getopt(*argc, *argv, "+hs:I:O:d:D:f:"))
         {
             case 'h':
                 usage();
@@ -101,6 +104,10 @@ static bool process_opts(int *argc, char ***argv)
             case 'D':
                 ok = DO_PARSE("second decimation",
                     parse_size32, optarg, &second_decimation);
+                break;
+            case 'f':
+                ok = DO_PARSE("sample frequency",
+                    parse_double, optarg, &sample_frequency);
                 break;
             case '?':
             default:
@@ -142,7 +149,7 @@ static bool write_new_header(int file_fd)
             initialise_header(header,
                 archive_mask, file_size,
                 input_block_size, output_block_size,
-                first_decimation, second_decimation)  &&
+                first_decimation, second_decimation, sample_frequency)  &&
             TEST_IO(lseek(file_fd, 0, SEEK_SET))  &&
             TEST_write(file_fd, header, DISK_HEADER_SIZE)  &&
             DO_(print_header(stdout, header)),

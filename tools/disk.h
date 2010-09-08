@@ -95,6 +95,7 @@ struct disk_header {
      * archiver, the parameters below are updated dynamically. */
 
     uint32_t current_major_block; // This block is being written
+    uint32_t last_duration;
 };
 
 
@@ -158,7 +159,8 @@ bool initialise_header(
     uint32_t input_block_size,
     uint32_t output_block_size,
     uint32_t first_decimation,
-    uint32_t second_decimation);
+    uint32_t second_decimation,
+    double sample_frequency);
 /* Reads the file size of the given file. */
 bool get_filesize(int disk_fd, uint64_t *file_size);
 /* Checks the given header for consistency. */
