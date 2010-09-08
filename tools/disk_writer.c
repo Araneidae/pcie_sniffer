@@ -21,19 +21,21 @@
 #include "mask.h"
 #include "transform.h"
 #include "disk.h"
+#include "locking.h"
 
 #include "disk_writer.h"
 
 
-static pthread_t writer_id;
 
+/* Used to terminate threads. */
+static bool writer_running;
+
+/* File handle for writing to disk. */
+static int disk_fd;
 
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 /* Disk header and in-ram data.                                              */
-
-/* File handle for writing to disk. */
-static int disk_fd;
 
 /* Memory mapped pointers to in memory data stored on disk. */
 static struct disk_header *header;      // Disk header with basic parameters
@@ -89,13 +91,69 @@ static void close_disk(void)
 
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-/* Disk writing thread.                                                      */
+/* Disk writing and read permission thread. */
 
-static struct reader_state *reader;
-static bool writer_running;
+/* This thread manages writing of blocks to the disk.  Requests for reads are
+ * interlocked with this thread so that reading is blocked while a write is
+ * currently in progress. */
 
+DECLARE_LOCKING(lock);
+
+/* Current write request. */
+static bool writing_active = false;
+static off64_t writing_offset;
+static void *writing_block;
+static size_t writing_length;
 
 static void * writer_thread(void *context)
+{
+    while (writer_running)
+    {
+        LOCK(lock);
+        while (!writing_active)
+            wait(&lock);
+        UNLOCK(lock);
+
+        ASSERT_IO(lseek(disk_fd, writing_offset, SEEK_SET));
+        ASSERT_write(disk_fd, writing_block, writing_length);
+
+        LOCK(lock);
+        writing_active = false;
+        signal(&lock);
+        UNLOCK(lock);
+    }
+    return NULL;
+}
+
+void schedule_write(off64_t offset, void *block, size_t length)
+{
+    LOCK(lock);
+    while (writing_active)
+        wait(&lock);
+    writing_offset = offset;
+    writing_block = block;
+    writing_length = length;
+    writing_active = true;
+    signal(&lock);
+    UNLOCK(lock);
+}
+
+void request_read(void)
+{
+    LOCK(lock);
+    while (writing_active)
+        wait(&lock);
+    UNLOCK(lock);
+}
+
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+/* Data processing thread. */
+
+static struct reader_state *reader;
+
+
+static void * transform_thread(void *context)
 {
     while (writer_running)
     {
@@ -112,14 +170,18 @@ static void * writer_thread(void *context)
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 /* Disk writing initialisation and startup.                                  */
 
+static pthread_t transform_id;
+static pthread_t writer_id;
+
 
 bool start_disk_writer(void)
 {
     reader = open_reader(true);
     writer_running = true;
     return
-        initialise_transform(disk_fd, header, dd_data)  &&
-        TEST_0(pthread_create(&writer_id, NULL, writer_thread, NULL));
+        initialise_transform(header, dd_data)  &&
+        TEST_0(pthread_create(&writer_id, NULL, writer_thread, NULL))  &&
+        TEST_0(pthread_create(&transform_id, NULL, transform_thread, NULL));
 }
 
 
@@ -128,6 +190,8 @@ void terminate_disk_writer(void)
     log_message("Waiting for writer");
     writer_running = false;
     stop_reader(reader);
+    ASSERT_0(pthread_cancel(writer_id));
+    ASSERT_0(pthread_join(transform_id, NULL));
     ASSERT_0(pthread_join(writer_id, NULL));
     close_reader(reader);
     close_disk();

@@ -13,5 +13,4 @@ void process_block(const void *read_block);
 
 struct disk_header;
 bool initialise_transform(
-    int output_file,
     struct disk_header *header, struct decimated_data *dd_area);

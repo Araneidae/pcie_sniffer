@@ -4,7 +4,6 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
-#include <aio.h>
 #include <math.h>
 #include <xmmintrin.h>
 
@@ -12,6 +11,8 @@
 #include "sniffer.h"
 #include "mask.h"
 #include "transform.h"
+#include "disk_writer.h"
+
 #include "disk.h"
 
 
@@ -30,31 +31,21 @@ static int input_decimation_count;
 
 /* Double-buffered block IO. */
 
-struct io_buffer {
-    void *buffers[2];           // Two major buffers to receive data
-    int current_buffer;         // Index of buffer currently receiving data
-    unsigned int fa_offset;     // Current sample count into current block
-    unsigned int d_offset;      // Current decimated sample count
-    struct aiocb aiocb;         // IO control block used for writing data
-    bool io_waiting;            // Set while AIO might be in progress
-};
-
-struct io_buffer io_buffer;
+static void *buffers[2];           // Two major buffers to receive data
+static int current_buffer;         // Index of buffer currently receiving data
+static unsigned int fa_offset;     // Current sample count into current block
+static unsigned int d_offset;      // Current decimated sample count
 
 
 static inline struct fa_entry * fa_block(int id)
 {
-    return
-        io_buffer.buffers[io_buffer.current_buffer] +
-        fa_data_offset(header, io_buffer.fa_offset, id);
+    return buffers[current_buffer] + fa_data_offset(header, fa_offset, id);
 }
 
 
 static inline struct decimated_data * d_block(int id)
 {
-    return
-        io_buffer.buffers[io_buffer.current_buffer] +
-        d_data_offset(header, io_buffer.d_offset, id);
+    return buffers[current_buffer] + d_data_offset(header, d_offset, id);
 }
 
 
@@ -62,17 +53,17 @@ static inline struct decimated_data * d_block(int id)
  * written, returns true iff the block is now full. */
 static bool advance_block(void)
 {
-    io_buffer.fa_offset += input_frame_count;
-    io_buffer.d_offset += input_frame_count / header->first_decimation;
-    return io_buffer.fa_offset >= header->major_sample_count;
+    fa_offset += input_frame_count;
+    d_offset += input_frame_count / header->first_decimation;
+    return fa_offset >= header->major_sample_count;
 }
 
 
 /* Called if the block is to be discarded. */
 static void reset_block(void)
 {
-    io_buffer.fa_offset = 0;
-    io_buffer.d_offset = 0;
+    fa_offset = 0;
+    d_offset = 0;
 }
 
 
@@ -84,39 +75,23 @@ static void write_major_block(void)
     header->current_major_block =
         (header->current_major_block + 1) % header->major_block_count;
 
-    if (io_buffer.io_waiting)
-    {
-        const struct aiocb *aiocb_list[] = { &io_buffer.aiocb };
-        ASSERT_IO(aio_suspend(aiocb_list, 1, NULL));
-    }
+    schedule_write(offset, buffers[current_buffer], header->major_block_size);
 
-    io_buffer.aiocb.aio_buf = io_buffer.buffers[io_buffer.current_buffer];
-    io_buffer.aiocb.aio_offset = offset;
-    ASSERT_IO(aio_write(&io_buffer.aiocb));
-    io_buffer.io_waiting = true;
-
-    io_buffer.fa_offset = 0;
-    io_buffer.d_offset = 0;
-    io_buffer.current_buffer = 1 - io_buffer.current_buffer;
+    fa_offset = 0;
+    d_offset = 0;
+    current_buffer = 1 - current_buffer;
 }
 
 
 /* Initialises IO buffers for the given minor block size. */
-static void initialise_io_buffer(int output_file)
+static void initialise_io_buffer(void)
 {
     for (int i = 0; i < 2; i ++)
-        io_buffer.buffers[i] = valloc(header->major_block_size);
+        buffers[i] = valloc(header->major_block_size);
 
-    io_buffer.current_buffer = 0;
-    io_buffer.fa_offset = 0;
-    io_buffer.d_offset = 0;
-    io_buffer.io_waiting = false;
-
-    io_buffer.aiocb.aio_fildes = output_file;
-    io_buffer.aiocb.aio_nbytes = header->major_block_size;
-    io_buffer.aiocb.aio_sigevent.sigev_notify = SIGEV_NONE;
-    io_buffer.aiocb.aio_reqprio = 0;
-    io_buffer.aiocb.aio_lio_opcode = 0;
+    current_buffer = 0;
+    fa_offset = 0;
+    d_offset = 0;
 }
 
 
@@ -330,7 +305,7 @@ void process_block(const void *block)
         transpose_block(block);
         decimate_block(block);
         bool must_write = advance_block();
-        if (io_buffer.fa_offset % (
+        if (fa_offset % (
                 header->first_decimation * header->second_decimation) == 0)
             double_decimate_block();
         if (must_write)
@@ -347,7 +322,6 @@ void process_block(const void *block)
 
 
 bool initialise_transform(
-    int output_file,
     struct disk_header *header_, struct decimated_data *dd_area_)
 {
     header = header_;
@@ -356,6 +330,6 @@ bool initialise_transform(
     input_decimation_count = input_frame_count / header->first_decimation;
     dd_offset = header->current_major_block * header->dd_sample_count;
 
-    initialise_io_buffer(output_file);
+    initialise_io_buffer();
     return true;
 }
