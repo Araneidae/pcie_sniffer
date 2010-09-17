@@ -44,21 +44,23 @@ static void __attribute__((format(printf, 2, 3)))
  *  CS      Prints a simple status report
  *  CF      Returns current sample frequency
  */
-static bool process_command(int scon, const char *buf)
+static void process_command(int scon, const char *buf)
 {
     switch (buf[1])
     {
         case 'Q':
             log_message("Shutdown command received");
             shutdown_archiver();
-            return true;
+            break;
         case 'F':
             write_string(scon, "%f\n", get_mean_frame_rate());
-            return true;
+            break;
         case 'S':
-            return TEST_OK_(false, "Status not implemented");
+            TEST_OK_(false, "Status not implemented");
+            break;
         default:
-            return TEST_OK_(false, "Unknown command");
+            TEST_OK_(false, "Unknown command");
+            break;
     }
 }
 
@@ -72,12 +74,36 @@ static bool parse_subscription(const char **string, filter_mask_t mask)
 }
 
 
+void report_socket_error(int scon, bool ok)
+{
+    if (ok)
+    {
+        /* If all is well write a single null to let the caller know to expect a
+         * normal response to follow. */
+        pop_error_handling(NULL);
+        char nul = '\0';
+        write(scon, &nul, 1);
+    }
+    else
+    {
+        /* If an error is encountered write the error message to the socket. */
+        char *error_message;
+        pop_error_handling(&error_message);
+        write_string(scon, "%s\n", error_message);
+        free(error_message);
+    }
+}
+
+
 /* A subscription is a command of the form S<mask> where <mask> is a mask
  * specification as described in mask.h.  The default mask is empty. */
-static bool process_subscribe(int scon, const char *buf)
+static void process_subscribe(int scon, const char *buf)
 {
     filter_mask_t mask;
+    push_error_handling();
     bool parse_ok = DO_PARSE("subscription", parse_subscription, buf, mask);
+    report_socket_error(scon, parse_ok);
+
     if (parse_ok)
     {
         struct reader_state *reader = open_reader(false);
@@ -97,19 +123,18 @@ static bool process_subscribe(int scon, const char *buf)
         }
         close_reader(reader);
     }
-    return parse_ok;
 }
 
 
-static bool process_error(int scon, const char *buf)
+static void process_error(int scon, const char *buf)
 {
-    return TEST_OK_(false, "Invalid command");
+    TEST_OK_(false, "Invalid command");
 }
 
 
 struct command_table {
     char id;            // Identification character
-    bool (*process)(int scon, const char *buf);
+    void (*process)(int scon, const char *buf);
 } command_table[] = {
     { 'C', process_command },
     { 'R', process_read },
@@ -157,7 +182,6 @@ static void * process_connection(void *context)
     }
 
 
-    push_error_handling();
     char buf[4096];
     if (read_line(scon, buf, sizeof(buf)))
     {
@@ -167,10 +191,8 @@ static void * process_connection(void *context)
         while (command->id  &&  command->id != buf[0])
             command += 1;
 
-        if (!command->process(scon, buf))
-            write_string(scon, "%s\n", get_error_message());
+        command->process(scon, buf);
     }
-    pop_error_handling();
 
     TEST_IO(close(scon));
     return NULL;

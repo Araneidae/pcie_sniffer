@@ -24,6 +24,7 @@
 #include "socket_server.h"
 #include "archiver.h"
 #include "parse.h"
+#include "reader.h"
 
 
 #define K               1024
@@ -63,7 +64,9 @@ static void usage(void)
 {
     printf(
 "Usage: %s [options] [<archive-file>]\n"
-"Captures continuous FA streaming data to disk\n"
+"Captures continuous FA streaming data to disk.  If <archive-file> is not\n"
+"specified the continuous streaming service will be provided but no archive\n"
+"will be written.\n"
 "\n"
 "Options:\n"
 "    -d:  Specify device to use for FA sniffer (default /dev/fa_sniffer0)\n"
@@ -228,6 +231,7 @@ int main(int argc, char **argv)
             start_disk_writer())  &&
         initialise_sniffer(fa_sniffer_device)  &&
         initialise_server(server_socket)  &&
+        initialise_reader(output_filename)  &&
         DO_(run_archiver());
 
     return ok ? 0 : 1;

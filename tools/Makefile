@@ -29,44 +29,34 @@ LDFLAGS += -lpthread -lrt -lm
 
 BUILD = archiver prepare capture
 
-archiver_SRCS += archiver.c
-archiver_SRCS += error.c
-archiver_SRCS += buffer.c
-archiver_SRCS += sniffer.c
-archiver_SRCS += disk_writer.c
-archiver_SRCS += disk.c
-archiver_SRCS += socket_server.c
-archiver_SRCS += mask.c
-archiver_SRCS += transform.c
-archiver_SRCS += reader.c
-archiver_SRCS += parse.c
-archiver_SRCS += locking.c
+COMMON_SRCS += error.c              # Core error handling framework
+COMMON_SRCS += locking.c            # Simple abstraction of pthread locking
+COMMON_SRCS += parse.c              # Parsing support
+COMMON_SRCS += mask.c               # BPM capture mask support
 
-read_SRCS += read.c
-read_SRCS += error.c
-read_SRCS += mask.c
-read_SRCS += disk.c
-read_SRCS += matlab.c
+# FA sniffer archiver
+archiver_SRCS += archiver.c         # Command line interface to archiver
+archiver_SRCS += buffer.c           # Ring buffer for data capture
+archiver_SRCS += sniffer.c          # Interface to FA sniffer driver
+archiver_SRCS += disk_writer.c      # Core disk writing access
+archiver_SRCS += disk.c             # Disk header format definitions
+archiver_SRCS += socket_server.c    # Socket server
+archiver_SRCS += transform.c        # Data transformation and access
+archiver_SRCS += reader.c           # Sniffer data readout
 
-prepare_SRCS += prepare.c
-prepare_SRCS += error.c
+# FA archive preparation
+prepare_SRCS += prepare.c           # Command line interface
 prepare_SRCS += disk.c
-prepare_SRCS += mask.c
-prepare_SRCS += parse.c
-prepare_SRCS += locking.c
 
-capture_SRCS += capture.c
-capture_SRCS += error.c
-capture_SRCS += mask.c
-capture_SRCS += matlab.c
-capture_SRCS += parse.c
-capture_SRCS += locking.c
+# FA data capture
+capture_SRCS += capture.c           # Command line interface
+capture_SRCS += matlab.c            # Matlab header support
 
 
 all: $(BUILD)
 
 define expand_build
-$(target): $($(target)_SRCS:.c=.o)
+$(target): $(COMMON_SRCS:.c=.o) $($(target)_SRCS:.c=.o)
 	$$(LINK.o) $$^ $$(LOADLIBES) $$(LDLIBS) -o $$@
 endef
 $(foreach target,$(BUILD),$(eval $(expand_build)))

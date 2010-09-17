@@ -14,6 +14,7 @@
 #include <string.h>
 #include <signal.h>
 #include <errno.h>
+#include <time.h>
 
 #include "error.h"
 #include "sniffer.h"
@@ -24,6 +25,7 @@
 
 #define BUFFER_SIZE     (1 << 16)
 
+enum data_format { DATA_FA, DATA_D, DATA_DD };
 
 /* Command line parameters. */
 static int port = 8888;
@@ -31,7 +33,11 @@ static const char *server_name;
 static const char *output_filename = NULL;
 static filter_mask_t mask;
 static bool matlab_format = false;
+static bool continuous_capture = false;
+static bool start_specified = false;
+static struct timespec start;
 static unsigned int sample_count = 0;
+static enum data_format data_format = DATA_FA;
 
 static int output_file = STDOUT_FILENO;
 
@@ -39,33 +45,70 @@ static int output_file = STDOUT_FILENO;
 static void usage(void)
 {
     printf(
-"Usage: capture [options] <archiver> <capture-mask>\n"
+"Usage: capture [options] <archiver> <capture-mask> [<samples>]\n"
 "\n"
-"Captures a continuous stream of sniffer frames from <archiver> until\n"
-"interrupted or the specified number of samples have been captured.\n"
-"The <capture-mask> specifies precisely which BPM ids will be captured.\n"
+"Captures sniffer frames from <archiver>, either reading historical data\n"
+"(if -s or -t is used) or live continuous data (if -C is specified).\n"
+"\n"
+"<capture-mask> specifies precisely which BPM ids will be captured.\n"
+"The mask is specified as a comma separated sequence of ranges or BPM ids\n"
+"where a range is two BPM ids separated by a hyphen, eg\n"
+"    mask = id [ \"-\" id ] [ \",\" mask ]\n"
+"For example, 1-168 specifies all arc BPMs.\n"
+"\n"
+"<samples> specifies how many samples will be captured or the sample time in\n"
+"seconds (if the number ends in s).  This must be specified when reading\n"
+"historical data (-s or -t).  If <samples> is not specified continuous\n"
+"capture (-C) can be interrupted with ctrl-C.\n"
 "\n"
 "The following options can be given:\n"
 "\n"
 "   -p:  Specify port to connect to on server (default is %d)\n"
-"   -n:  Specify number of samples or the sample time in seconds (if the\n"
-"        number ends in s).  Otherwise interrupt to stop capture.\n"
 "   -M   Save file in matlab format\n"
 "   -o:  Save output to specified file, otherwise stream to stdout\n"
+"   -s:  Specify start, as a date and time in ISO 8601 format\n"
+"   -t:  Specify start as a time of day today\n"
+"   -C   Request continuous capture from live data stream\n"
+"   -f:  Specify data format, can be -fF for FA (the default), -fd for single\n"
+"        decimated data, or -fD for double decimated data.  Decimated data is\n"
+"        only avaiable for archived data.\n"
 "\n"
-"Note that if -M is specified and capture is interrupted then output must\n"
-"be directed to a file, otherwise the capture count in the result will\n"
-"be invalid.\n"
+"Either a start time or continuous capture must be specified.\n"
+"Note that if -M is specified and continuous capture is interrupted then\n"
+"output must be directed to a file, otherwise the capture count in the result\n"
+"will be invalid.\n"
     , port);
 }
 
 
-static bool parse_samples(const char **string, unsigned int *result)
+/* Returns seconds at midnight this morning for time of day relative timestamp
+ * specification.  This uses the current timezone.  Horrible code. */
+static time_t midnight_today(void)
 {
-    bool ok = parse_uint(string, result);
-    if (ok  &&  read_char(string, 's'))
-        *result *= 10072;
-    return ok;
+    time_t now;
+    ASSERT_IO(now = time(NULL));
+    struct tm tm;
+    ASSERT_NULL(localtime_r(&now, &tm));
+    tm.tm_sec = 0;
+    tm.tm_min = 0;
+    tm.tm_hour = 0;
+    time_t midnight;
+    ASSERT_IO(midnight = mktime(&tm));
+    return midnight;
+}
+
+
+static bool parse_data_format(char *string)
+{
+    if (strcmp(string, "F") == 0)
+        data_format = DATA_FA;
+    else if (strcmp(string, "D") == 0)
+        data_format = DATA_D;
+    else if (strcmp(string, "DD") == 0)
+        data_format = DATA_DD;
+    else
+        return TEST_OK_(false, "Invalid data format");
+    return true;
 }
 
 
@@ -74,17 +117,24 @@ static bool parse_opts(int *argc, char ***argv)
     bool ok = true;
     while (ok)
     {
-        switch (getopt(*argc, *argv, "+hp:n:Mo:"))
+        switch (getopt(*argc, *argv, "+hMoCf:p:s:t:"))
         {
             case 'h':   usage();                                    exit(0);
             case 'M':   matlab_format = true;                       break;
             case 'o':   output_filename = optarg;                   break;
+            case 'C':   continuous_capture = true;                  break;
+            case 'f':   ok = parse_data_format(optarg);             break;
             case 'p':
                 ok = DO_PARSE("server port", parse_int, optarg, &port);
                 break;
-            case 'n':
-                ok = DO_PARSE("sample count",
-                    parse_samples, optarg, &sample_count);
+            case 's':
+                start_specified = true;
+                ok = DO_PARSE("start time", parse_datetime, optarg, &start);
+                break;
+            case 't':
+                start_specified = true;
+                ok = DO_PARSE("start time", parse_time, optarg, &start);
+                start.tv_sec += midnight_today();
                 break;
             default:
                 fprintf(stderr, "Try `capture -h` for usage\n");
@@ -99,14 +149,37 @@ static bool parse_opts(int *argc, char ***argv)
 }
 
 
+static bool parse_samples(const char **string, unsigned int *result)
+{
+    bool ok = parse_uint(string, result);
+    if (ok  &&  read_char(string, 's'))
+        *result *= 10072;
+    return ok;
+}
+
+
 static bool parse_args(int argc, char **argv)
 {
     return
         parse_opts(&argc, &argv)  &&
-        TEST_OK_(argc == 2,
+        TEST_OK_(argc == 2  ||  argc == 3,
             "Wrong number of arguments.  Try `capture -h` for help.")  &&
         DO_(server_name = argv[0])  &&
-        DO_PARSE("capture mask", parse_mask, argv[1], mask);
+        DO_PARSE("capture mask", parse_mask, argv[1], mask)  &&
+        IF_(argc == 3,
+            DO_PARSE("sample count", parse_samples, argv[2], &sample_count));
+}
+
+
+static bool validate_args(void)
+{
+    return
+        TEST_OK_(continuous_capture != start_specified,
+            "Must specify precisely one of -s or -C")  &&
+        TEST_OK_(continuous_capture  ||  sample_count > 0,
+            "Must specify sample count for historical data")  &&
+        TEST_OK_(start_specified  ||  data_format == DATA_FA,
+            "Decimated data must be historical");
 }
 
 
@@ -143,7 +216,7 @@ static bool initialise_signal(void)
 {
     struct sigaction interrupt = {
         .sa_handler = interrupt_capture, .sa_flags = 0 };
-    struct sigaction do_ignore   = { .sa_handler = SIG_IGN, .sa_flags = 0 };
+    struct sigaction do_ignore = { .sa_handler = SIG_IGN, .sa_flags = 0 };
     return
         TEST_IO(sigfillset(&interrupt.sa_mask))  &&
         TEST_IO(sigaction(SIGINT,  &interrupt, NULL))  &&
@@ -153,10 +226,38 @@ static bool initialise_signal(void)
 
 static bool request_data(int sock)
 {
-    char request[RAW_MASK_BYTES + 8];
-    strcpy(request, "SR");
-    format_raw_mask(mask, request + 2);
-    return TEST_write(sock, request, RAW_MASK_BYTES + 2);
+    char raw_mask[RAW_MASK_BYTES+1];
+    format_raw_mask(mask, raw_mask);
+    char request[1024];
+    if (continuous_capture)
+        sprintf(request, "SR%s\n", raw_mask);
+    else
+        sprintf(request, "R%sR%sS%ld.%09ldN%u\n",
+            "F", raw_mask, start.tv_sec, start.tv_nsec, sample_count);
+    return TEST_write(sock, request, strlen(request));
+}
+
+
+/* If the request was accepted the first byte of the response is a null
+ * character, otherwise the entire response is an error message. */
+static bool check_response(int sock)
+{
+    char response[1024];
+    if (TEST_read(sock, response, 1))
+    {
+        if (*response == '\0')
+            return true;
+        else
+        {
+            /* Pass entire error response from server to stderr. */
+            int len;
+            if (TEST_IO(len = read(sock, response + 1, sizeof(response) - 1)))
+                fprintf(stderr, "%.*s", len + 1, response);
+            return false;
+        }
+    }
+    else
+        return false;
 }
 
 
@@ -224,11 +325,11 @@ static bool capture_and_save(int sock)
 
 int main(int argc, char **argv)
 {
-    if (!parse_args(argc, argv))
-        return 1;
-
     int sock;
     bool ok =
+        parse_args(argc, argv)  &&
+        validate_args()  &&
+
         connect_server(&sock)  &&
         IF_(output_filename != NULL,
             TEST_IO_(
@@ -236,7 +337,9 @@ int main(int argc, char **argv)
                     output_filename, O_WRONLY | O_CREAT | O_TRUNC, 0666),
                 "Unable to open output file \"%s\"", output_filename))  &&
         request_data(sock)  &&
+        check_response(sock)  &&
+
         initialise_signal()  &&
         capture_and_save(sock);
-    return ok ? 0 : 2;
+    return ok ? 0 : 1;
 }

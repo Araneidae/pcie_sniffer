@@ -269,6 +269,17 @@ void print_header(FILE *out, struct disk_header *header)
 }
 
 
+bool lock_archive(int disk_fd)
+{
+    struct flock flock = {
+        .l_type = F_WRLCK, .l_whence = SEEK_SET,
+        .l_start = 0, .l_len = 0
+    };
+    return TEST_IO_(fcntl(disk_fd, F_SETLK, &flock),
+        "Unable to lock archive for writing: already running?");
+}
+
+
 bool get_filesize(int disk_fd, uint64_t *file_size)
 {
     /* First try blocksize, if that fails try stat: the first works on a

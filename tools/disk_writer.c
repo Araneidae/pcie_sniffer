@@ -43,17 +43,6 @@ static struct data_index *data_index;   // Index of blocks
 static struct decimated_data *dd_data;  // Double decimated data
 
 
-static bool lock_disk(void)
-{
-    struct flock flock = {
-        .l_type = F_WRLCK, .l_whence = SEEK_SET,
-        .l_start = 0, .l_len = 0
-    };
-    return TEST_IO_(fcntl(disk_fd, F_SETLK, &flock),
-        "Unable to lock archive for writing: already running?");
-}
-
-
 /* Opens and locks the archive for direct IO and maps the three in memory
  * regions directly into memory.  Returns the configured input block size. */
 bool initialise_disk_writer(const char *file_name, uint32_t *input_block_size)
@@ -63,7 +52,7 @@ bool initialise_disk_writer(const char *file_name, uint32_t *input_block_size)
         TEST_IO_(
             disk_fd = open(file_name, O_RDWR | O_DIRECT | O_LARGEFILE),
             "Unable to open archive file \"%s\"", file_name)  &&
-        lock_disk()  &&
+        lock_archive(disk_fd)  &&
         TEST_IO(
             header = mmap(NULL, DISK_HEADER_SIZE,
                 PROT_READ | PROT_WRITE, MAP_SHARED, disk_fd, 0))  &&

@@ -30,11 +30,14 @@ void push_error_handling(void)
     error_stack = new_entry;
 }
 
-void pop_error_handling(void)
+void pop_error_handling(char **error_message)
 {
     struct error_stack *top = error_stack;
     error_stack = top->last;
-    free(top->message);
+    if (error_message)
+        *error_message = top->message;
+    else
+        free(top->message);
     free(top);
 }
 

@@ -23,6 +23,11 @@ bool parse_size64(const char **string, uint64_t *result);
  *      yyyy-mm-ddThh:mm:ss[.nnnnnnnnnn] . */
 struct timespec;
 bool parse_datetime(const char **string, struct timespec *ts);
+/* Parses time of day in ISO 8601 format optional nanoseconds:
+ *      hh:mm:ss[.nnnnnnnnnn] . */
+bool parse_time(const char **string, struct timespec *ts);
+/* Parses timestamp in format: secs[.nnn] */
+bool parse_seconds(const char **string, struct timespec *ts);
 
 /* Only succeeds if **string=='\0'. */
 bool parse_end(const char **string);

@@ -32,6 +32,8 @@ def count_mask(mask):
 class connection:
     class EOF(Exception):
         pass
+    class Error(Exception):
+        pass
 
     def __init__(self, server=DEFAULT_SERVER, port=DEFAULT_PORT):
         self.sock = socket.create_connection((server, port))
@@ -41,9 +43,9 @@ class connection:
     def close(self):
         self.sock.close()
 
-    def recv(self):
+    def recv(self, block_size=4096):
         select.select([self.sock.fileno()], [], [])
-        chunk = self.sock.recv(4096)
+        chunk = self.sock.recv(block_size)
         if not chunk:
             raise self.EOF('Connection closed by server')
         return chunk
@@ -62,6 +64,9 @@ class subscription(connection):
         self.count = count_mask(self.mask)
 
         self.sock.send('SR%s\n' % format_mask(self.mask))
+        c = self.recv(1)
+        if c != chr(0):
+            raise self.Error(c + self.recv())
 
     def read(self, samples):
         raw = self.read_block(8 * samples * self.count)

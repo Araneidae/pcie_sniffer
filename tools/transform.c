@@ -31,9 +31,14 @@ static struct decimated_data *dd_area;
 static int input_frame_count;
 static int input_decimation_count;
 
-/* Lock used to protect access to the archive: protects the variable part of the
- * index, the data index and the dd area. */
-DECLARE_LOCKING(lock);
+/* This lock guards access to header->current_major_block, or to be precise,
+ * enforces the invariant described here.  The transform thread has full
+ * unconstrained access to this variable, but only updates it under this lock.
+ * All major blocks other than current_major_block are valid for reading from
+ * disk, the current block is either being worked on or being written to disk.
+ * The request_read() function ensures that the previously current block is
+ * written and therefore is available. */
+DECLARE_LOCKING(transform_lock);
 
 
 
@@ -382,76 +387,43 @@ static void initialise_index(void)
 
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-/* Top level control. */
-
-
-void process_block(const void *block, struct timespec *ts)
-{
-    /* This lock is arguably a little broad: in particular, we hold the lock
-     * while calling write_major_block(), which in turn captures a lock.
-     * Fortunately these locks nest in one direction only, and this isn't a bad
-     * place in which to be blocked ... waiting for a write to complete. */
-    LOCK(lock);
-    if (block)
-    {
-        index_minor_block(block, ts);
-        transpose_block(block);
-        decimate_block(block);
-        bool must_write = advance_block();
-        if (fa_offset % (
-                header->first_decimation * header->second_decimation) == 0)
-            double_decimate_block();
-        if (must_write)
-        {
-            write_major_block();
-            advance_index();
-        }
-    }
-    else
-    {
-        /* If we see a gap in the block then discard all the work we've done so
-         * far. */
-        reset_block();
-        reset_index();
-        dd_offset = header->current_major_block * header->dd_sample_count;
-    }
-    UNLOCK(lock);
-}
+/* Interlocked access. */
 
 
 int get_block_index(void)
 {
     int ix;
-    LOCK(lock);
+    LOCK(transform_lock);
     ix = header->current_major_block;
-    UNLOCK(lock);
+    UNLOCK(transform_lock);
     return ix;
 }
 
 
 void get_index_blocks(int ix, int samples, struct data_index *result)
 {
-    LOCK(lock);
+    LOCK(transform_lock);
     memcpy(result, data_index + ix, sizeof(struct data_index) * samples);
-    UNLOCK(lock);
+    UNLOCK(transform_lock);
 }
 
 
 void get_dd_data(
     int dd_index, int id, int samples, struct decimated_data *result)
 {
-    LOCK(lock);
+    LOCK(transform_lock);
     struct decimated_data *start =
         dd_area + header->dd_total_count * id + dd_index;
     memcpy(result, start, sizeof(struct decimated_data) * samples);
-    UNLOCK(lock);
+    UNLOCK(transform_lock);
 }
 
 
-bool timestamp_to_index(uint64_t timestamp, int *major_block, int *offset)
+bool timestamp_to_index(
+    uint64_t timestamp, unsigned int *major_block, unsigned int *offset)
 {
     bool ok;
-    LOCK(lock);
+    LOCK(transform_lock);
 
     int N = header->major_block_count;
     int current = header->current_major_block;
@@ -478,7 +450,7 @@ bool timestamp_to_index(uint64_t timestamp, int *major_block, int *offset)
      * (perhaps there's a capture gap) simply skip to the following block. */
     uint64_t block_start = data_index[low].timestamp;
     int duration = data_index[low].duration;
-    ok = TEST_OK_(duration > 0, "Invalid index entry");
+    ok = TEST_OK_(duration > 0, "Timestamp not in index");
     if (ok)
     {
         uint64_t raw_offset =
@@ -498,15 +470,53 @@ bool timestamp_to_index(uint64_t timestamp, int *major_block, int *offset)
             TEST_OK_(timestamp >= block_start, "Timestamp too early");
     }
 
-    UNLOCK(lock);
+    UNLOCK(transform_lock);
     return ok;
 }
-
 
 
 const struct disk_header *get_header(void)
 {
     return header;
+}
+
+
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+/* Top level control. */
+
+
+/* Processes a single block of raw frames read from the internal circular
+ * buffer, transposing for efficient read and generating decimations as
+ * appropriate.  Schedules write to disk as appropriate when buffer is full
+ * enough. */
+void process_block(const void *block, struct timespec *ts)
+{
+    if (block)
+    {
+        index_minor_block(block, ts);
+        transpose_block(block);
+        decimate_block(block);
+        bool must_write = advance_block();
+        if (fa_offset % (
+                header->first_decimation * header->second_decimation) == 0)
+            double_decimate_block();
+        if (must_write)
+        {
+            LOCK(transform_lock);
+            write_major_block();
+            advance_index();
+            UNLOCK(transform_lock);
+        }
+    }
+    else
+    {
+        /* If we see a gap in the block then discard all the work we've done so
+         * far. */
+        reset_block();
+        reset_index();
+        dd_offset = header->current_major_block * header->dd_sample_count;
+    }
 }
 
 

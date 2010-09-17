@@ -21,6 +21,9 @@ bool parse_end(const char **string)
 }
 
 
+/* Called after a C library conversion function checks that anything was
+ * converted and that the conversion was successful.  Relies on errno being zero
+ * before conversion started. */
 static bool check_number(const char *start, const char *end)
 {
     return
@@ -88,42 +91,76 @@ bool parse_size64(const char **string, uint64_t *result)
 }
 
 
+/* Parses optional number of the form .nnnnnnnnn expressing a fraction of a
+ * second, converts into nanoseconds, allowing up to 9 digits. */
+static bool parse_nanoseconds(const char **string, long *nsec)
+{
+    bool ok = true;
+    if (read_char(string, '.')  &&  '0' <= **string  &&  **string <= '9')
+    {
+        /* Annoyingly complicated.  Just want to interpret .nnnnnnnn as an
+         * integer nanoseconds, but want it to behave as if it was a decimal
+         * fraction -- so need to count number of digits parsed and fixup
+         * afterwards! */
+        char *end;
+        *nsec = strtoul(*string, &end, 10);
+        int digits = end - *string;
+        *string = end;
+        ok = TEST_OK_(digits <= 9, "Too many digits for ns");
+        for ( ; ok  &&  digits < 9; digits ++)
+            *nsec *= 10;
+    }
+    else
+        *nsec = 0;
+    return ok;
+}
+
+
+static bool parse_date_or_time(
+    const char *format, const char *error_message,
+    const char **string, struct tm *tm, long *nsecs)
+{
+    char *end;  // Mustn't assign NULL to *string!
+    return
+        TEST_NULL_(
+            end = strptime(*string, format, tm), error_message)  &&
+        DO_(*string = end)  &&
+        parse_nanoseconds(string, nsecs);
+}
+
+
+bool parse_time(const char **string, struct timespec *ts)
+{
+    struct tm tm;
+    return
+        parse_date_or_time(
+            "%H:%M:%S", "Incomplete time",
+            string, &tm, &ts->tv_nsec)  &&
+        DO_(ts->tv_sec = tm.tm_sec + 60 * (tm.tm_min + 60 * tm.tm_hour));
+}
+
+
 bool parse_datetime(const char **string, struct timespec *ts)
 {
-    errno = 0;
     struct tm tm;
-    int nsecs = 0;
-    char *end = strptime(*string, "%Y-%m-%dT%H:%M:%S", &tm);
-    bool ok =
-        TEST_NULL_(end, "Incomplete date time")  &&
-        check_number(*string, end);
-    if (ok)
-    {
-        *string = end;
-        if (read_char(string, '.')  &&  '0' <= **string  &&  **string <= '9')
-        {
-            /* Annoyingly complicated.  Just want to interpret .nnnnnnnn as an
-             * integer nanoseconds, but want it to behave as if it was a decimal
-             * fraction -- so need to count number of digits parsed and fixup
-             * afterwards! */
-            nsecs = strtoul(*string, &end, 10);
-            int digits = end - *string;
-            *string = end;
-            ok = TEST_OK_(digits <= 9, "Too many digits for ns");
-            for ( ; ok  &&  digits < 9; digits ++)
-                nsecs *= 10;
-        }
-    }
-    if (ok)
-    {
-        /* Convert (tm,nsecs) value into timespec value for return.  Note that
-         * the more standard function to use here is mktime(), but that depends
-         * on the value of the TZ environment variable. */
-        ts->tv_sec = timegm(&tm);
-        ts->tv_nsec = nsecs;
-        ok = TEST_IO_(ts->tv_sec, "Invalid date");
-    }
-    return ok;
+    return
+        parse_date_or_time(
+            "%Y-%m-%dT%H:%M:%S", "Incomplete date time",
+            string, &tm, &ts->tv_nsec)  &&
+        /* Convert tm value into seconds for return.  Note that the more
+         * standard function to use here is mktime(), but that depends on the
+         * value of the TZ environment variable. */
+        TEST_IO_(ts->tv_sec = timegm(&tm), "Invalid date");
+}
+
+
+bool parse_seconds(const char **string, struct timespec *ts)
+{
+    int sec;
+    return
+        parse_int(string, &sec)  &&
+        parse_nanoseconds(string, &ts->tv_nsec)  &&
+        DO_(ts->tv_sec = sec);
 }
 
 
@@ -132,19 +169,16 @@ bool report_parse_error(
 {
     if (ok  &&  parse_end(end))
     {
-        pop_error_handling();
+        pop_error_handling(NULL);
         return true;
     }
     else
     {
-        /* Convert local parse error message into a more global message.  We
-         * have to hang onto the new error message while we pop the error
-         * context so the new message becomes the error message. */
-        char *error_message = hprintf(
+        char *error_message;
+        pop_error_handling(&error_message);
+        print_error(
             "Error parsing %s: %s at offset %d in \"%s\"",
-            message, get_error_message(), *end - string, string);
-        pop_error_handling();
-        print_error("%s", error_message);
+            message, error_message, *end - string, string);
         free(error_message);
         return false;
     }

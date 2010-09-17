@@ -25,8 +25,10 @@ void get_index_blocks(int ix, int samples, struct data_index *result);
 /* Reads dd data. */
 void get_dd_data(
     int dd_index, int id, int samples, struct decimated_data *result);
-/* Converts timestamp into corresponding index, or fails if not in memory. */
-bool timestamp_to_index(uint64_t timestamp, int *major_block, int *offset);
+/* Converts timestamp into corresponding index, or fails if timestamp is outside
+ * the archive. */
+bool timestamp_to_index(
+    uint64_t timestamp, unsigned int *major_block, unsigned int *offset);
 
 /* Returns an unlocked pointer to the header: should only be used to access the
  * constant header fields. */

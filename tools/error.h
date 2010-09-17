@@ -21,10 +21,11 @@ void vlog_message(int priority, const char *format, va_list args);
  * print_error() in the same thread will cause the error message to be stashed.
  * While redirection is in force the error message can be retrieved by calling
  * get_error_message().  Previous error handling is restored by calling
- * pop_error_handling() after which get_error_message() can no longer be called.
- * Error handlers can be nested like exception handlers. */
+ * pop_error_handling() after which get_error_message() can no longer be called
+ * and any previously returned error message will be invalid.  Error handlers
+ * can be nested like exception handlers. */
 void push_error_handling(void);
-void pop_error_handling(void);
+void pop_error_handling(char **error_message);
 const char * get_error_message(void);
 void reset_error_message(void);
 
