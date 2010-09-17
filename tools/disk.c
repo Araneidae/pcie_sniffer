@@ -323,9 +323,9 @@ bool get_filesize(int disk_fd, uint64_t *file_size)
 }
 
 
-void dump_binary(FILE *out, void *buffer, size_t length)
+void dump_binary(FILE *out, const void *buffer, size_t length)
 {
-    uint8_t *dump = buffer;
+    const uint8_t *dump = buffer;
 
     for (size_t a = 0; a < length; a += 16)
     {

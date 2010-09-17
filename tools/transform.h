@@ -5,8 +5,7 @@ struct data_index;
 
 
 struct decimated_data {
-    int32_t meanx, minx, maxx, stdx;
-    int32_t meany, miny, maxy, stdy;
+    struct fa_entry mean, min, max, std;
 };
 
 
@@ -26,9 +25,11 @@ void get_index_blocks(int ix, int samples, struct data_index *result);
 void get_dd_data(
     int dd_index, int id, int samples, struct decimated_data *result);
 /* Converts timestamp into corresponding index, or fails if timestamp is outside
- * the archive. */
+ * the archive.  Returns number of available samples, the major block containing
+ * the first data point, and the offset of the selected timestamp into that
+ * block. */
 bool timestamp_to_index(
-    uint64_t timestamp, unsigned int sample_count,
+    uint64_t timestamp, uint64_t *samples_available,
     unsigned int *major_block, unsigned int *offset);
 
 /* Returns an unlocked pointer to the header: should only be used to access the

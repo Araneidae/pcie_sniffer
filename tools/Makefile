@@ -19,7 +19,12 @@ CFLAGS += -Wredundant-decls
 CFLAGS += -Wmissing-prototypes
 CFLAGS += -Wmissing-declarations
 CFLAGS += -Wstrict-prototypes
+
 CFLAGS += -msse
+CFLAGS += -msse2
+CFLAGS += -mfpmath=sse
+CFLAGS += -march=pentium4
+CFLAGS += -ffast-math
 
 CPPFLAGS += -D_GNU_SOURCE
 CPPFLAGS += -D_FILE_OFFSET_BITS=64

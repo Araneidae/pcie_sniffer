@@ -171,4 +171,4 @@ void print_header(FILE *out, struct disk_header *header);
 bool lock_archive(int disk_fd);
 
 /* Debug utility for dumping binary data in ASCII format. */
-void dump_binary(FILE *out, void *buffer, size_t length);
+void dump_binary(FILE *out, const void *buffer, size_t length);

@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
+#include <unistd.h>
+#include <stdlib.h>
 #include <inttypes.h>
 #include <math.h>
 #include <pthread.h>
@@ -89,7 +91,6 @@ static void write_major_block(void)
 {
     off64_t offset = header->major_data_start +
         (off64_t) header->current_major_block * header->major_block_size;
-
     schedule_write(offset, buffers[current_buffer], header->major_block_size);
 
     current_buffer = 1 - current_buffer;
@@ -122,7 +123,8 @@ static void transpose_column(
     const struct fa_entry *input, struct fa_entry *output)
 {
     COMPILE_ASSERT(sizeof(__m64) == FA_ENTRY_SIZE);
-    for (int i = 0; i < input_frame_count; i++)
+    int loop_count = input_frame_count / 2;     // Optimiser needs advice?!
+    for (int i = 0; i < loop_count; i++)
     {
         /* This call is an SSE intrinsic, defined in xmmintrin.h, only enabled
          * if -msse specified on the command line.  The effect of this is to use
@@ -139,10 +141,12 @@ static void transpose_column(
          *      Lists intrinsics for another compiler
          *  http://math.nju.edu.cn/help/mathhpc/doc/intel/cc/
          *  mergedProjects/intref_cls/
-         *      Documents Intel intrinsics. */
-        _mm_stream_pi((__m64 *) output, *(__m64 *) input);
-
-        output += 1;
+         *      Documents Intel intrinsics. 
+         *  www.info.univ-angers.fr/~richer/ens/l3info/ao/intel_intrinsics.pdf
+         *      Intel Intrinsic Reference, document 312482-003US. */
+        _mm_stream_pi((__m64 *) output++, *(__m64 *) input);
+        input += FA_ENTRY_COUNT;
+        _mm_stream_pi((__m64 *) output++, *(__m64 *) input);
         input += FA_ENTRY_COUNT;
     }
 }
@@ -165,6 +169,11 @@ static void transpose_block(const void *read_block)
             written += 1;
         }
     }
+
+    /* After performing the transpose with SSE above we have to reset the
+     * floating point state as otherwise subsequent floating point arithmetic
+     * will fail mysteriously. */
+    _mm_empty();
 }
 
 
@@ -182,36 +191,40 @@ static void decimate_column_one(
     int64_t sumx = 0, sumy = 0;
     int32_t minx = INT32_MAX, maxx = INT32_MIN;
     int32_t miny = INT32_MAX, maxy = INT32_MIN;
+    const struct fa_entry *in = input;
     for (int i = 0; i < N; i ++)
     {
-        int32_t x = input[i * FA_ENTRY_COUNT].x;
-        int32_t y = input[i * FA_ENTRY_COUNT].y;
+        int32_t x = in->x;
+        int32_t y = in->y;
         sumx += x;
         sumy += y;
         if (x < minx)   minx = x;
         if (maxx < x)   maxx = x;
         if (y < miny)   miny = y;
         if (maxy < y)   maxy = y;
+        in += FA_ENTRY_COUNT;
     }
-    output->minx = minx;    output->maxx = maxx;
-    output->miny = miny;    output->maxy = maxy;
+    output->min.x = minx;    output->max.x = maxx;
+    output->min.y = miny;    output->max.y = maxy;
     double meanx = (double) sumx / N;
     double meany = (double) sumy / N;
-    output->meanx = (int32_t) round(meanx);
-    output->meany = (int32_t) round(meany);
+    output->mean.x = (int32_t) round(meanx);
+    output->mean.y = (int32_t) round(meany);
 
     /* For numerically stable computation of variance we take a second pass over
      * the data. */
     double sumvarx = 0, sumvary = 0;
+    in = input;
     for (int i = 0; i < N; i ++)
     {
-        int32_t x = input[i * FA_ENTRY_COUNT].x;
-        int32_t y = input[i * FA_ENTRY_COUNT].y;
+        int32_t x = in->x;
+        int32_t y = in->y;
         sumvarx += (x - meanx) * (x - meanx);
         sumvary += (y - meany) * (y - meany);
+        in += FA_ENTRY_COUNT;
     }
-    output->stdx = (int32_t) round(sqrt(sumvarx / N));
-    output->stdy = (int32_t) round(sqrt(sumvary / N));
+    output->std.x = (int32_t) round(sqrt(sumvarx / N));
+    output->std.y = (int32_t) round(sqrt(sumvary / N));
 }
 
 static void decimate_column(
@@ -259,23 +272,23 @@ static void decimate_decimation(
     int32_t miny = INT32_MAX, maxy = INT32_MIN;
     for (int i = 0; i < N; i ++, input ++)
     {
-        sumx += input->meanx;
-        sumy += input->meany;
-        sumvarx = input->stdx * input->stdx;
-        sumvary = input->stdy * input->stdy;
-        if (input->minx < minx)     minx = input->minx;
-        if (maxx < input->maxx)     maxx = input->maxx;
-        if (input->miny < miny)     miny = input->miny;
-        if (maxy < input->maxy)     maxy = input->maxy;
+        sumx += input->mean.x;
+        sumy += input->mean.y;
+        sumvarx = input->std.x * input->std.x;
+        sumvary = input->std.y * input->std.y;
+        if (input->min.x < minx)     minx = input->min.x;
+        if (maxx < input->max.x)     maxx = input->max.x;
+        if (input->min.y < miny)     miny = input->min.y;
+        if (maxy < input->max.y)     maxy = input->max.y;
     }
-    output->meanx = (int32_t) (sumx / N);
-    output->meany = (int32_t) (sumy / N);
-    output->minx = minx;
-    output->maxx = maxx;
-    output->miny = miny;
-    output->maxy = maxy;
-    output->stdx = (int32_t) round(sqrt(sumvarx / N));
-    output->stdy = (int32_t) round(sqrt(sumvary / N));
+    output->mean.x = (int32_t) (sumx / N);
+    output->mean.y = (int32_t) (sumy / N);
+    output->min.x = minx;
+    output->max.x = maxx;
+    output->min.y = miny;
+    output->max.y = maxy;
+    output->std.x = (int32_t) round(sqrt(sumvarx / N));
+    output->std.y = (int32_t) round(sqrt(sumvary / N));
 }
 
 
@@ -421,7 +434,7 @@ void get_dd_data(
 
 
 bool timestamp_to_index(
-    uint64_t timestamp, unsigned int sample_count,
+    uint64_t timestamp, uint64_t *samples_available,
     unsigned int *major_block, unsigned int *offset)
 {
     bool ok;
@@ -469,14 +482,11 @@ bool timestamp_to_index(
         *major_block = low;
         *offset = (int) raw_offset;
         int block_count = current > low ? current - low : N - low + current;
-        uint64_t samples_available =
+        *samples_available =
             (uint64_t) block_count * header->major_sample_count - raw_offset;
         ok =
             TEST_OK_(low != current, "Timestamp too late")  &&
-            TEST_OK_(timestamp >= block_start, "Timestamp too early")  &&
-            TEST_OK_(sample_count <= samples_available,
-                "Only %"PRIu64" samples of %d requested available",
-                samples_available, sample_count);
+            TEST_OK_(timestamp >= block_start, "Timestamp too early");
     }
 
     UNLOCK(transform_lock);
