@@ -34,15 +34,17 @@ enum data_format { DATA_FA, DATA_D, DATA_DD };
 
 /* Command line parameters. */
 static int port = 8888;
-static const char *server_name;
+static const char *server_name = "pc0062";
 static const char *output_filename = NULL;
-static filter_mask_t mask;
+static filter_mask_t capture_mask;
 static bool matlab_format = false;
 static bool continuous_capture = false;
 static bool start_specified = false;
 static struct timespec start;
 static unsigned int sample_count = 0;
 static enum data_format data_format = DATA_FA;
+static unsigned int data_mask = 1;
+static bool show_progress = false;
 
 static int output_file = STDOUT_FILENO;
 
@@ -50,14 +52,14 @@ static int output_file = STDOUT_FILENO;
 static void usage(void)
 {
     printf(
-"Usage: capture [options] <archiver> <capture-mask> [<samples>]\n"
+"Usage: capture [options] <capture-mask> [<samples>]\n"
 "\n"
-"Captures sniffer frames from <archiver>, either reading historical data\n"
+"Captures sniffer frames from the FA archiver, either reading historical data\n"
 "(if -b, -t or -s is given) or live continuous data (if -C is specified).\n"
 "\n"
 "<capture-mask> specifies precisely which BPM ids will be captured.\n"
 "The mask is specified as a comma separated sequence of ranges or BPM ids\n"
-"where a range is two BPM ids separated by a hyphen, eg\n"
+"where a range is two BPM ids separated by a hyphen, ie:\n"
 "    mask = id [ \"-\" id ] [ \",\" mask ]\n"
 "For example, 1-168 specifies all arc BPMs.\n"
 "\n"
@@ -68,25 +70,30 @@ static void usage(void)
 "\n"
 "The following options can be given:\n"
 "\n"
+"   -S:  Specify archive server to read from (default is %s)\n"
 "   -p:  Specify port to connect to on server (default is %d)\n"
 "   -M   Save file in matlab format\n"
 "   -o:  Save output to specified file, otherwise stream to stdout\n"
-"   -f:  Specify data format, can be -fF for FA (the default), -fd for single\n"
-"        decimated data, or -fD for double decimated data.  Decimated data is\n"
-"        only avaiable for archived data.\n"
+"   -f:  Specify data format, can be -fF for FA (the default), -fd[mask] for\n"
+"        single decimated data, or -fD[mask] for double decimated data, where\n"
+"        [mask] is an optional data mask.  Decimated data is only available\n"
+"        for archived data.\n"
+"           The bits in the data mask correspond to decimated fields:\n"
+"            1 => mean, 2 => min, 4 => max, 8 => standard deviation\n"
+"   -P   Show progress of capture on stderr\n"
 "\n"
-"Precisely one of the following must be given:\n"
+"Either a start time or continuous capture must be specified, and so\n"
+"precisely one of the following must be given:\n"
 "   -s:  Specify start, as a date and time in ISO 8601 format\n"
 "   -t:  Specify start as a time of day today, or yesterday if Y added to\n"
 "        end, in format hh:mm:ss[Y]\n"
 "   -b:  Specify start as a time in the past as hh:mm:ss\n"
 "   -C   Request continuous capture from live data stream\n"
 "\n"
-"Either a start time or continuous capture must be specified.\n"
 "Note that if -M is specified and continuous capture is interrupted then\n"
 "output must be directed to a file, otherwise the capture count in the result\n"
 "will be invalid.\n"
-    , port);
+    , server_name, port);
 }
 
 
@@ -116,17 +123,33 @@ static bool parse_today(const char **string, struct timespec *ts)
 }
 
 
-static bool parse_data_format(char *string)
+static bool parse_data_format(const char **string, enum data_format *format)
 {
-    if (strcmp(string, "F") == 0)
-        data_format = DATA_FA;
-    else if (strcmp(string, "D") == 0)
-        data_format = DATA_D;
-    else if (strcmp(string, "DD") == 0)
-        data_format = DATA_DD;
+    if (read_char(string, 'F'))
+    {
+        *format = DATA_FA;
+        return true;
+    }
     else
-        return TEST_OK_(false, "Invalid data format");
-    return true;
+    {
+        if (read_char(string, 'd'))
+            *format = DATA_D;
+        else if (read_char(string, 'D'))
+            *format = DATA_DD;
+        else
+            return TEST_OK_(false, "Invalid data format");
+
+        if (**string == '\0')
+        {
+            data_mask = 1;          // Read mean by default
+            return true;
+        }
+        else
+            return
+                parse_uint(string, &data_mask)  &&
+                TEST_OK_(0 < data_mask  &&  data_mask <= 0xF,
+                    "Invalid data mask");
+    }
 }
 
 
@@ -155,18 +178,23 @@ static bool parse_opts(int *argc, char ***argv)
     bool ok = true;
     while (ok)
     {
-        switch (getopt(*argc, *argv, "+hMCo:f:s:t:b:p:"))
+        switch (getopt(*argc, *argv, "+hMCo:S:Ps:t:b:p:f:"))
         {
             case 'h':   usage();                                    exit(0);
             case 'M':   matlab_format = true;                       break;
             case 'C':   continuous_capture = true;                  break;
             case 'o':   output_filename = optarg;                   break;
-            case 'f':   ok = parse_data_format(optarg);             break;
+            case 'S':   server_name = optarg;                       break;
+            case 'P':   show_progress = true;                       break;
             case 's':   ok = parse_start(parse_datetime, optarg);   break;
             case 't':   ok = parse_start(parse_today, optarg);      break;
             case 'b':   ok = parse_start(parse_before, optarg);     break;
             case 'p':
                 ok = DO_PARSE("server port", parse_int, optarg, &port);
+                break;
+            case 'f':
+                ok = DO_PARSE("data format",
+                    parse_data_format, optarg, &data_format);
                 break;
             default:
                 fprintf(stderr, "Try `capture -h` for usage\n");
@@ -194,12 +222,11 @@ static bool parse_args(int argc, char **argv)
 {
     return
         parse_opts(&argc, &argv)  &&
-        TEST_OK_(argc == 2  ||  argc == 3,
+        TEST_OK_(argc == 1  ||  argc == 2,
             "Wrong number of arguments.  Try `capture -h` for help.")  &&
-        DO_(server_name = argv[0])  &&
-        DO_PARSE("capture mask", parse_mask, argv[1], mask)  &&
-        IF_(argc == 3,
-            DO_PARSE("sample count", parse_samples, argv[2], &sample_count));
+        DO_PARSE("capture mask", parse_mask, argv[0], capture_mask)  &&
+        IF_(argc == 2,
+            DO_PARSE("sample count", parse_samples, argv[1], &sample_count));
 }
 
 
@@ -264,13 +291,22 @@ static bool initialise_signal(void)
 static bool request_data(int sock)
 {
     char raw_mask[RAW_MASK_BYTES+1];
-    format_raw_mask(mask, raw_mask);
+    format_raw_mask(capture_mask, raw_mask);
     char request[1024];
     if (continuous_capture)
         sprintf(request, "SR%s\n", raw_mask);
     else
-        sprintf(request, "R%sR%sS%ld.%09ldN%u\n",
-            "F", raw_mask, start.tv_sec, start.tv_nsec, sample_count);
+    {
+        char format[16];
+        switch (data_format)
+        {
+            case DATA_FA:   sprintf(format, "F");                   break;
+            case DATA_D:    sprintf(format, "DF%u",  data_mask);    break;
+            case DATA_DD:   sprintf(format, "DDF%u", data_mask);    break;
+        }
+        sprintf(request, "R%sMR%sS%ld.%09ldN%u\n",
+            format, raw_mask, start.tv_sec, start.tv_nsec, sample_count);
+    }
     return TEST_write(sock, request, strlen(request));
 }
 
@@ -298,11 +334,31 @@ static bool check_response(int sock)
 }
 
 
+#define PROGRESS_INTERVAL   (1 << 12)
+
+static void update_progress(unsigned int frames_written)
+{
+    const char *progress = "|/-\\";
+    if (frames_written % PROGRESS_INTERVAL == 0)
+    {
+        fprintf(stderr, "%c %9d",
+            progress[(frames_written / PROGRESS_INTERVAL) % 4], frames_written);
+        if (sample_count > 0)
+            fprintf(stderr, " (%5.2f%%)", 
+                100.0 * (double) frames_written / sample_count);
+        fprintf(stderr, "\r");
+        fflush(stderr);
+    }
+}
+
+
 /* This routine reads data from sock and writes out complete frames until either
  * the sample count is reached or the read is interrupted. */
 static unsigned int capture_data(int sock)
 {
-    int frame_size = count_mask_bits(mask) * FA_ENTRY_SIZE;
+    int frame_size =
+        count_data_bits(data_mask) *
+        count_mask_bits(capture_mask) * FA_ENTRY_SIZE;
     unsigned int frames_written = 0;
     char buffer[BUFFER_SIZE];
     int residue = 0;            // Partial frame received, not yet written out
@@ -334,6 +390,9 @@ static unsigned int capture_data(int sock)
         residue = rx - to_write;
         if (residue > 0)
             memmove(buffer, buffer + to_write, residue);
+
+        if (show_progress)
+            update_progress(frames_written);
     }
 
     return frames_written;
@@ -346,14 +405,17 @@ static bool capture_and_save(int sock)
     {
         unsigned int frames_written;
         return
-            write_matlab_header(output_file, mask, sample_count, true)  &&
+            write_matlab_header(
+                output_file, capture_mask, data_mask, sample_count, "fa")  &&
             DO_(frames_written = capture_data(sock))  &&
             IF_(frames_written != sample_count,
                 /* Seek back to the start of the file and rewrite the header
                  * with the correct capture count. */
                 TEST_IO_(lseek(output_file, 0, SEEK_SET),
                     "Cannot update matlab file, file not seekable")  &&
-                write_matlab_header(output_file, mask, frames_written, true));
+                write_matlab_header(
+                    output_file, capture_mask, data_mask,
+                    frames_written, "fa"));
     }
     else
         return DO_(capture_data(sock));

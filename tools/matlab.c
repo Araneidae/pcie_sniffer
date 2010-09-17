@@ -81,8 +81,8 @@ static int write_matrix_header(
 
 
 bool write_matlab_header(
-    int file_out, filter_mask_t filter_mask,
-    unsigned int dump_length, bool matlab_double)
+    int file_out, filter_mask_t filter_mask, unsigned int data_mask,
+    unsigned int dump_length, const char *name)
 {
     char mat_header[4096];
     memset(mat_header, 0, sizeof(mat_header));
@@ -104,10 +104,21 @@ bool write_matlab_header(
     h = (int32_t *)((char *)h + mask_length + padding);
 
     /* Finally write out the matrix mat_header for the fa data. */
+    int field_count = count_data_bits(data_mask);
     write_matrix_header(&h,
-        matlab_double ? mxDOUBLE_CLASS : mxINT32_CLASS,
-        "fa", miINT32, dump_length * mask_length * 8,
-        3, 2, mask_length, dump_length);
+        mxDOUBLE_CLASS, name,
+        miINT32, dump_length * field_count * mask_length * FA_ENTRY_SIZE,
+        4, 2, field_count, mask_length, dump_length);
 
     return TEST_write(file_out, mat_header, (char *) h - mat_header);
 }
+
+
+unsigned int count_data_bits(unsigned int mask)
+{
+    return
+        ((mask >> 0) & 1) + ((mask >> 1) & 1) +
+        ((mask >> 2) & 1) + ((mask >> 3) & 1);
+}
+
+
