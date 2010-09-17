@@ -527,6 +527,7 @@ BPM_list = [('Other', [])] + [
      [('SR%02dC-DI-EBPM-%02d' % (c+1, n+1), 7*c+n+1) for n in range(7)])
     for c in range(24)]
 BPM_list[21][1].append(('SR21C-DI-EBPM-08', 169))
+BPM_list[13][1][:0] = [('SR13S-DI-EBPM-%02d' % (n+1), 174+n) for n in range(2)]
 
 
 # Start on BPM #1 -- as sensible a default as any
