@@ -10,7 +10,6 @@
 #include <math.h>
 #include <pthread.h>
 #include <errno.h>
-#include <xmmintrin.h>
 
 #include "error.h"
 #include "sniffer.h"
@@ -125,31 +124,9 @@ static void initialise_io_buffer(void)
 static void transpose_column(
     const struct fa_entry *input, struct fa_entry *output)
 {
-    COMPILE_ASSERT(sizeof(__m64) == FA_ENTRY_SIZE);
-    int loop_count = input_frame_count / 2;     // Optimiser needs advice?!
-    for (int i = 0; i < loop_count; i++)
+    for (int i = input_frame_count; i > 0; i--)
     {
-        /* This call is an SSE intrinsic, defined in xmmintrin.h, only enabled
-         * if -msse specified on the command line.  The effect of this is to use
-         * the MMX register for transferring a single FA entry, but more to the
-         * point, write combining is used on the output.  This means that the
-         * output block is never fetched into cache, which should significantly
-         * speed up processing.
-         *    Alas, the documentation for this is pretty poor.
-         *
-         * References include:
-         *  http://lwn.net/Articles/255364/
-         *      Ulrich Drepper on memory optimisation
-         *  http://www.redjam.com/codeplay/documentation/intrinsics.html
-         *      Lists intrinsics for another compiler
-         *  http://math.nju.edu.cn/help/mathhpc/doc/intel/cc/
-         *  mergedProjects/intref_cls/
-         *      Documents Intel intrinsics. 
-         *  www.info.univ-angers.fr/~richer/ens/l3info/ao/intel_intrinsics.pdf
-         *      Intel Intrinsic Reference, document 312482-003US. */
-        _mm_stream_pi((__m64 *) output++, *(__m64 *) input);
-        input += FA_ENTRY_COUNT;
-        _mm_stream_pi((__m64 *) output++, *(__m64 *) input);
+        *output ++ = *input;
         input += FA_ENTRY_COUNT;
     }
 }
@@ -172,11 +149,6 @@ static void transpose_block(const void *read_block)
             written += 1;
         }
     }
-
-    /* After performing the transpose with SSE above we have to reset the
-     * floating point state as otherwise subsequent floating point arithmetic
-     * will fail mysteriously. */
-    _mm_empty();
 }
 
 
