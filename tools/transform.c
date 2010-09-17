@@ -479,6 +479,10 @@ const struct disk_header *get_header(void)
     return header;
 }
 
+const struct decimated_data * get_dd_area(void)
+{
+    return dd_area;
+}
 
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */

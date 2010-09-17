@@ -279,7 +279,14 @@ static bool timestamp_to_dd_index(
     uint64_t start, unsigned int samples,
     unsigned int *block, unsigned int *offset)
 {
-    return TEST_OK_(false, "not implemented");
+    int first_decimation = get_header()->first_decimation;
+    int second_decimation = get_header()->second_decimation;
+    int decimation = first_decimation * second_decimation;
+    uint64_t available;
+    return
+        timestamp_to_index(start, &available, block, offset)  &&
+        DO_(*offset /= decimation; available /= decimation)  &&
+        check_samples(available, samples);
 }
 
 
@@ -323,7 +330,12 @@ static bool read_dd_block(
     int archive, unsigned int major_block, unsigned int id,
     void *block, unsigned int *samples)
 {
-    return TEST_OK_(false, "DD not implemented");
+    const struct disk_header *header = get_header();
+    const struct decimated_data *dd_area = get_dd_area();
+    *samples = header->dd_sample_count;
+    int offset = header->dd_total_count * id + major_block * *samples;
+    memcpy(block, dd_area + offset, sizeof(struct decimated_data) * *samples);
+    return true;
 }
 
 
@@ -506,7 +518,6 @@ bool initialise_reader(const char *archive)
     const struct disk_header *header = get_header();
     fa_reader.block_total_count  = header->major_block_count;
     d_reader.block_total_count   = header->major_block_count;
-// these are all bogus!
     dd_reader.block_total_count  = header->major_block_count;
 
     return initialise_buffer_pool(256);

@@ -40,3 +40,7 @@ const struct disk_header *get_header(void);
 bool initialise_transform(
     struct disk_header *header, struct data_index *data_index,
     struct decimated_data *dd_area);
+
+// !!!!!!
+// Not right.  Returns DD data area.
+const struct decimated_data * get_dd_area(void);
