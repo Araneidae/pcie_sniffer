@@ -161,7 +161,7 @@ struct reader {
 };
 
 
-static void transfer_data(
+static bool transfer_data(
     const struct reader *reader, read_buffers_t read_buffers,
     int archive, int scon, struct iter_mask *iter, unsigned int data_mask,
     unsigned int block, unsigned int offset, unsigned int count)
@@ -207,10 +207,11 @@ static void transfer_data(
         block = (block + 1) % reader->block_total_count;
         offset = 0;
     }
+    return ok;
 }
 
 
-static void read_data(
+static bool read_data(
     const struct reader *reader, int scon,
     unsigned int data_mask, filter_mask_t read_mask,
     uint64_t start, unsigned int samples)
@@ -224,10 +225,10 @@ static void read_data(
         mask_to_archive(read_mask, &iter)  &&
         lock_buffers(&read_buffers, iter.count)  &&
         TEST_IO(archive = open(archive_filename, O_RDONLY));
-    report_socket_error(scon, ok);
+    bool write_ok = report_socket_error(scon, ok);
 
-    if (ok)
-        transfer_data(
+    if (ok  &&  write_ok)
+        write_ok = transfer_data(
             reader, read_buffers, archive, scon,
             &iter, data_mask, block, offset, samples);
 
@@ -235,6 +236,8 @@ static void read_data(
         unlock_buffers(read_buffers, iter.count);
     if (archive != -1)
         close(archive);
+
+    return write_ok;
 }
 
 
@@ -482,16 +485,16 @@ static bool parse_read_request(const char **string, struct read_parse *parse)
 
 
 /* Convert timestamp into block index. */
-void process_read(int scon, const char *buf)
+bool process_read(int scon, const char *buf)
 {
     struct read_parse parse;
     push_error_handling();      // Popped by report_socket_error()
     if (DO_PARSE("read request", parse_read_request, buf, &parse))
-        read_data(
+        return read_data(
             parse.reader, scon, parse.data_mask,
             parse.read_mask, parse.start, parse.samples);
     else
-        report_socket_error(scon, false);
+        return report_socket_error(scon, false);
 }
 
 

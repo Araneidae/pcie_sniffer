@@ -178,8 +178,9 @@ void terminate_disk_writer(void)
 {
     log_message("Waiting for writer");
     writer_running = false;
-    stop_reader(reader);
     ASSERT_0(pthread_cancel(writer_id));
+    ASSERT_0(pthread_cancel(transform_id));
+    stop_reader(reader);
     ASSERT_0(pthread_join(transform_id, NULL));
     ASSERT_0(pthread_join(writer_id, NULL));
     close_reader(reader);

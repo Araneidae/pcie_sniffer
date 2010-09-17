@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <inttypes.h>
 #include <string.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -22,66 +23,86 @@
 #include "buffer.h"
 #include "reader.h"
 #include "parse.h"
+#include "transform.h"
+#include "disk.h"
 
 #include "socket_server.h"
 
 
-static void __attribute__((format(printf, 2, 3)))
+static bool __attribute__((format(printf, 2, 3)))
     write_string(int sock, const char *format, ...)
 {
     va_list args;
     va_start(args, format);
     char *buffer = vhprintf(format, args);
-    if (!TEST_write(sock, buffer, strlen(buffer)))
-        log_error("Unable to write \"%s\" to socket %d, error: %s\n",
-            buffer, sock, get_error_message());
+    bool ok = TEST_write_(
+        sock, buffer, strlen(buffer), "Unable to write response");
     free(buffer);
+    return ok;
 }
 
 
-/* We provide a very limited set of commands:
- *  CQ      Closes archive server
- *  CS      Prints a simple status report
- *  CF      Returns current sample frequency
- *  CT      Returns earliest available timestamp
- *  CH      Halts data capture (only sensible for debug use)
- *  CR      Resumes halted data capture
- */
-static void process_command(int scon, const char *buf)
+static double get_mean_frame_rate(void)
 {
-    bool ok = true;
-    push_error_handling();
-    switch (buf[1])
-    {
-        case 'Q':
-            log_message("Shutdown command received");
-            shutdown_archiver();
-            break;
-        case 'F':
-            write_string(scon, "%f\n", get_mean_frame_rate());
-            break;
-        case 'S':
-            ok = TEST_OK_(false, "Status not implemented");
-            break;
-        case 'H':
-            log_message("Temporary halt command received");
-            enable_buffer_write(false);
-            break;
-        case 'R':
-            log_message("Resume command received");
-            enable_buffer_write(true);
-            break;
-        case 'T':
-        default:
-            ok = TEST_OK_(false, "Unknown command");
-            break;
-    }
+    const struct disk_header *header = get_header();
+    return (1e6 * header->major_sample_count) / header->last_duration;
+}
 
-    char *error_message;
-    pop_error_handling(&error_message);
-    if (!ok)
-        write_string(scon, "%s\n", error_message);
-    free(error_message);
+
+/* The C command prefix is followed by a sequence of one letter commands, and
+ * each letter receives a one line response.  The following commands are
+ * supported:
+ *
+ *  Q   Closes archive server
+ *  H   Halts data capture (only sensible for debug use)
+ *  R   Resumes halted data capture
+ *
+ *  F   Returns current sample frequency
+ *  d   Returns first decimation
+ *  D   Returns second decimation
+ *  T   Returns earliest available timestamp
+ */
+static bool process_command(int scon, const char *buf)
+{
+    const struct disk_header *header = get_header();
+    bool ok = true;
+    for (buf ++; ok  &&  *buf != '\0'; buf ++)
+    {
+        switch (*buf)
+        {
+            case 'Q':
+                log_message("Shutdown command received");
+                ok = write_string(scon, "Shutdown\n");
+                shutdown_archiver();
+                break;
+            case 'H':
+                log_message("Temporary halt command received");
+                ok = write_string(scon, "Halted\n");
+                enable_buffer_write(false);
+                break;
+            case 'R':
+                log_message("Resume command received");
+                enable_buffer_write(true);
+                break;
+
+            case 'F':
+                ok = write_string(scon, "%f\n", get_mean_frame_rate());
+                break;
+            case 'd':
+                ok = write_string(scon,
+                     "%"PRIu32"\n", header->first_decimation);
+                break;
+            case 'D':
+                ok = write_string(scon,
+                     "%"PRIu32"\n", header->second_decimation);
+                break;
+
+            default:
+                ok = write_string(scon, "Unknown command '%c'\n", *buf);
+                break;
+        }
+    }
+    return ok;
 }
 
 
@@ -94,40 +115,41 @@ static bool parse_subscription(const char **string, filter_mask_t mask)
 }
 
 
-void report_socket_error(int scon, bool ok)
+bool report_socket_error(int scon, bool ok)
 {
+    bool write_ok;
     if (ok)
     {
         /* If all is well write a single null to let the caller know to expect a
          * normal response to follow. */
         pop_error_handling(NULL);
         char nul = '\0';
-        write(scon, &nul, 1);
+        write_ok = TEST_write(scon, &nul, 1);
     }
     else
     {
         /* If an error is encountered write the error message to the socket. */
         char *error_message;
         pop_error_handling(&error_message);
-        write_string(scon, "%s\n", error_message);
+        write_ok = write_string(scon, "%s\n", error_message);
         free(error_message);
     }
+    return write_ok;
 }
 
 
 /* A subscription is a command of the form S<mask> where <mask> is a mask
  * specification as described in mask.h.  The default mask is empty. */
-static void process_subscribe(int scon, const char *buf)
+static bool process_subscribe(int scon, const char *buf)
 {
     filter_mask_t mask;
     push_error_handling();
     bool parse_ok = DO_PARSE("subscription", parse_subscription, buf, mask);
-    report_socket_error(scon, parse_ok);
+    bool ok = report_socket_error(scon, parse_ok);
 
     if (parse_ok)
     {
         struct reader_state *reader = open_reader(false);
-        bool ok = true;
         while (ok)
         {
             const void *block = get_read_block(reader, NULL, NULL);
@@ -142,19 +164,22 @@ static void process_subscribe(int scon, const char *buf)
             }
         }
         close_reader(reader);
+        return ok;
     }
+    else
+        return TEST_OK_(false, "Syntax error");
 }
 
 
-static void process_error(int scon, const char *buf)
+static bool process_error(int scon, const char *buf)
 {
-    TEST_OK_(false, "Invalid command");
+    return TEST_OK_(false, "Invalid command");
 }
 
 
 struct command_table {
     char id;            // Identification character
-    void (*process)(int scon, const char *buf);
+    bool (*process)(int scon, const char *buf);
 } command_table[] = {
     { 'C', process_command },
     { 'R', process_read },
@@ -194,27 +219,38 @@ static void * process_connection(void *context)
 
     struct sockaddr_in name;
     socklen_t namelen = sizeof(name);
+    char client_name[64];
     if (TEST_IO(getpeername(scon, (struct sockaddr *) &name, &namelen)))
     {
         uint8_t * ip = (uint8_t *) &name.sin_addr.s_addr;
-        log_message("Connected from %u.%u.%u.%u:%u",
+        sprintf(client_name, "%u.%u.%u.%u:%u",
             ip[0], ip[1], ip[2], ip[3], ntohs(name.sin_port));
     }
-
+    else
+        sprintf(client_name, "unknown");
 
     char buf[4096];
-    if (read_line(scon, buf, sizeof(buf)))
+    push_error_handling();
+    bool ok = read_line(scon, buf, sizeof(buf));
+    if (ok)
     {
-        log_message("Read: \"%s\"", buf);
+        log_message("Client %s: \"%s\"", client_name, buf);
         /* Command successfully read, dispatch it to the appropriate handler. */
         struct command_table * command = command_table;
         while (command->id  &&  command->id != buf[0])
             command += 1;
 
-        command->process(scon, buf);
+        ok = command->process(scon, buf);
     }
+    ok = TEST_IO(close(scon))  &&  ok;
 
-    TEST_IO(close(scon));
+    /* Report any errors. */
+    char *error_message;
+    pop_error_handling(&error_message);
+    if (!ok)
+        log_message("Client %s: %s", client_name, error_message);
+    free(error_message);
+
     return NULL;
 }
 

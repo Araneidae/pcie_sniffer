@@ -154,7 +154,8 @@ bool write_frames(
         while (buffered > 0)
         {
             size_t wr;
-            if (!TEST_IO(wr = write(file, buffer + written, buffered)))
+            if (!TEST_IO_(wr = write(file, buffer + written, buffered),
+                    "Unable to write frame"))
                 return false;
             written += wr;
             buffered -= wr;

@@ -6,4 +6,4 @@ void terminate_server(void);
 /* Reports error status on the connected socket and calls pop_error_handling().
  * If there is no error to report then a single null byte is written to the
  * socket to signal a valid status. */
-void report_socket_error(int scon, bool ok);
+bool report_socket_error(int scon, bool ok);
