@@ -169,6 +169,3 @@ bool validate_header(struct disk_header *header, uint64_t file_size);
 void print_header(FILE *out, struct disk_header *header);
 /* Locks archive for exclusive access. */
 bool lock_archive(int disk_fd);
-
-/* Debug utility for dumping binary data in ASCII format. */
-void dump_binary(FILE *out, const void *buffer, size_t length);

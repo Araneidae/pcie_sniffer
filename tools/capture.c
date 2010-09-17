@@ -34,7 +34,8 @@ static int port = 8888;
 static const char *server_name = "pc0062";
 static const char *output_filename = NULL;
 static filter_mask_t capture_mask;
-static bool matlab_format = false;
+static bool matlab_format = true;
+static bool squeeze_matlab = true;
 static bool continuous_capture = false;
 static bool start_specified = false;
 static struct timespec start;
@@ -125,6 +126,19 @@ static bool read_archive_parameters(void)
 }
 
 
+static unsigned int get_decimation(void)
+{
+    switch (data_format)
+    {
+        /* Deliberate fall-through in all three cases. */
+        case DATA_DD:   return first_decimation * second_decimation;
+        case DATA_D:    return first_decimation;
+        case DATA_FA:   return 1;
+        default:        return 0;   // Not going to happen
+    }
+}
+
+
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 /* Argument parsing. */
 
@@ -152,7 +166,7 @@ static void usage(void)
 "\n"
 "   -S:  Specify archive server to read from (default is %s)\n"
 "   -p:  Specify port to connect to on server (default is %d)\n"
-"   -M   Save file in matlab format\n"
+"   -R   Save in raw format, otherwise the data is saved in matlab format\n"
 "   -o:  Save output to specified file, otherwise stream to stdout\n"
 "   -f:  Specify data format, can be -fF for FA (the default), -fd[mask] for\n"
 "        single decimated data, or -fD[mask] for double decimated data, where\n"
@@ -170,9 +184,9 @@ static void usage(void)
 "   -b:  Specify start as a time in the past as hh:mm:ss\n"
 "   -C   Request continuous capture from live data stream\n"
 "\n"
-"Note that if -M is specified and continuous capture is interrupted then\n"
-"output must be directed to a file, otherwise the capture count in the result\n"
-"will be invalid.\n"
+"Note that if matlab format is specified and continuous capture is\n"
+"interrupted then output must be directed to a file, otherwise the capture\n"
+"count in the result will be invalid.\n"
     , server_name, port);
 }
 
@@ -258,10 +272,10 @@ static bool parse_opts(int *argc, char ***argv)
     bool ok = true;
     while (ok)
     {
-        switch (getopt(*argc, *argv, "+hMCo:S:qs:t:b:p:f:"))
+        switch (getopt(*argc, *argv, "+hRCo:S:qs:t:b:p:f:"))
         {
             case 'h':   usage();                                    exit(0);
-            case 'M':   matlab_format = true;                       break;
+            case 'R':   matlab_format = true;                       break;
             case 'C':   continuous_capture = true;                  break;
             case 'o':   output_filename = optarg;                   break;
             case 'S':   server_name = optarg;                       break;
@@ -293,16 +307,8 @@ static bool parse_samples(const char **string, unsigned int *result)
 {
     bool ok = parse_uint(string, result);
     if (ok  &&  read_char(string, 's'))
-    {
-        *result = (unsigned int) round(*result * sample_frequency);
-        switch (data_format)
-        {
-            /* Deliberate fall-through in all three cases. */
-            case DATA_DD:   *result /= second_decimation;
-            case DATA_D:    *result /= first_decimation;
-            case DATA_FA:   ;
-        }
-    }
+        *result = (unsigned int) round(
+            *result * sample_frequency / get_decimation());
     return ok  &&  TEST_OK_(*result > 0, "Zero sample count");
 }
 
@@ -323,7 +329,9 @@ static bool parse_args(int argc, char **argv)
 static bool validate_args(void)
 {
     return
-        TEST_OK_(continuous_capture != start_specified,
+        TEST_OK_(continuous_capture || start_specified,
+            "Must specify a start date or continuous capture")  &&
+        TEST_OK_(!continuous_capture || !start_specified,
             "Cannot combine continuous and archive capture")  &&
         TEST_OK_(continuous_capture  ||  sample_count > 0,
             "Must specify sample count for historical data")  &&
@@ -468,23 +476,43 @@ static unsigned int capture_data(int sock)
 }
 
 
+static const char *format_name(void)
+{
+    switch (data_format)
+    {
+        case DATA_FA:   return "fa";
+        case DATA_D:    return "d";
+        case DATA_DD:   return "dd";
+        default:        return NULL;    // Not going to happen
+    }
+}
+
+
+static bool write_header(unsigned int frames_written)
+{
+    return write_matlab_header(
+        output_file, capture_mask, data_mask, get_decimation(),
+        frames_written, format_name(), squeeze_matlab);
+}
+
+
 static bool capture_and_save(int sock)
 {
     if (matlab_format)
     {
         unsigned int frames_written;
         return
-            write_matlab_header(
-                output_file, capture_mask, data_mask, sample_count, "fa")  &&
+            write_header(sample_count)  &&
             DO_(frames_written = capture_data(sock))  &&
             IF_(frames_written != sample_count,
                 /* Seek back to the start of the file and rewrite the header
-                 * with the correct capture count. */
+                 * with the correct capture count.  We guard against the
+                 * improbable misfortune of one frame, because in that case
+                 * writing will break. */
+                TEST_OK(frames_written > 1)  &&
                 TEST_IO_(lseek(output_file, 0, SEEK_SET),
                     "Cannot update matlab file, file not seekable")  &&
-                write_matlab_header(
-                    output_file, capture_mask, data_mask,
-                    frames_written, "fa"));
+                write_header(frames_written));
     }
     else
         return DO_(capture_data(sock));

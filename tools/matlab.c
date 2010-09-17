@@ -47,7 +47,7 @@ static void write_matlab_string(int32_t **hh, const char *string)
  * following data to ensure that the entire matrix is padded to 8 bytes. */
 static int write_matrix_header(
     int32_t **hh, int class, const char *name,
-    int data_type, int data_length,
+    int data_type, bool squeeze, int data_length,
     int dimensions, ...)
 {
     va_list dims;
@@ -62,10 +62,20 @@ static int write_matrix_header(
     *h++ = 0;
 
     // Matrix dimensions: one int32 for each dimension
-    *h++ = miINT32;     *h++ = dimensions * sizeof(int32_t);
+    *h++ = miINT32;
+    int32_t *dim_size = h++;    // Size of dimensions to be written here
+    int squeezed_dims = 0;
     for (int i = 0; i < dimensions; i ++)
-        *h++ = va_arg(dims, int32_t);
-    h += dimensions & 1;    // Padding if required
+    {
+        int size = va_arg(dims, int32_t);
+        if (size != 1  ||  !squeeze)
+        {
+            *h++ = size;
+            squeezed_dims += 1;
+        }
+    }
+    *dim_size = squeezed_dims * sizeof(int32_t);
+    h += squeezed_dims & 1;    // Padding if required
 
     // Element name
     write_matlab_string(&h, name);
@@ -80,9 +90,17 @@ static int write_matrix_header(
 }
 
 
+/* Advances pointer by length together with the precomputed padding. */
+static void pad(int32_t **hh, int length, int padding)
+{
+    *hh = (int32_t *)((char *)*hh + length + padding);
+}
+
+
 bool write_matlab_header(
     int file_out, filter_mask_t filter_mask, unsigned int data_mask,
-    unsigned int dump_length, const char *name)
+    unsigned int decimation,
+    unsigned int dump_length, const char *name, bool squeeze)
 {
     char mat_header[4096];
     memset(mat_header, 0, sizeof(mat_header));
@@ -97,17 +115,23 @@ bool write_matlab_header(
 
     int mask_length = count_mask_bits(filter_mask);
 
-    /* Write out the index array tying data back to original BPM ids. */
+    /* Write out the decimation as a matrix(!) */
     int padding = write_matrix_header(&h,
-        mxDOUBLE_CLASS, "ids", miUINT8, mask_length, 2, 1, mask_length);
+        mxINT32_CLASS, "decimation", miINT32, false, sizeof(int32_t), 1, 1);
+    *h++ = decimation;
+    pad(&h, 0, padding);
+
+    /* Write out the index array tying data back to original BPM ids. */
+    padding = write_matrix_header(&h,
+        mxDOUBLE_CLASS, "ids", miUINT8, false, mask_length, 2, 1, mask_length);
     compute_mask_ids((uint8_t *)h, filter_mask);
-    h = (int32_t *)((char *)h + mask_length + padding);
+    pad(&h, mask_length, padding);
 
     /* Finally write out the matrix mat_header for the fa data. */
     int field_count = count_data_bits(data_mask);
     write_matrix_header(&h,
-        mxDOUBLE_CLASS, name,
-        miINT32, dump_length * field_count * mask_length * FA_ENTRY_SIZE,
+        mxDOUBLE_CLASS, name, miINT32, squeeze,
+        dump_length * field_count * mask_length * FA_ENTRY_SIZE,
         4, 2, field_count, mask_length, dump_length);
 
     return TEST_write(file_out, mat_header, (char *) h - mat_header);
@@ -120,5 +144,3 @@ unsigned int count_data_bits(unsigned int mask)
         ((mask >> 0) & 1) + ((mask >> 1) & 1) +
         ((mask >> 2) & 1) + ((mask >> 3) & 1);
 }
-
-

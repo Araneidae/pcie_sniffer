@@ -144,3 +144,7 @@ void panic_error(const char * filename, int line)
  * defined all over the place, but there doesn't appear to be a definitive
  * definition anywhere. */
 #define ARRAY_SIZE(a)   (sizeof(a)/sizeof((a)[0]))
+
+
+/* Debug utility for dumping binary data in ASCII format. */
+void dump_binary(FILE *out, const void *buffer, size_t length);

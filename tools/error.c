@@ -1,6 +1,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <unistd.h>
 #include <string.h>
 #include <errno.h>
@@ -200,3 +201,43 @@ void panic_error(const char * filename, int line)
     fflush(stderr);
     _exit(255);
 }
+
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+/* Utility function with no proper home. */
+
+
+void dump_binary(FILE *out, const void *buffer, size_t length)
+{
+    const uint8_t *dump = buffer;
+
+    for (size_t a = 0; a < length; a += 16)
+    {
+        fprintf(out, "%08zx: ", a);
+        for (int i = 0; i < 16; i ++)
+        {
+            if (a + i < length)
+                fprintf(out, " %02x", dump[a+i]);
+            else
+                fprintf(out, "   ");
+            if (i % 16 == 7)
+                fprintf(out, " ");
+        }
+
+        fprintf(out, "  ");
+        for (int i = 0; i < 16; i ++)
+        {
+            uint8_t c = dump[a+i];
+            if (a + i < length)
+                fprintf(out, "%c", 32 <= c  &&  c < 127 ? c : '.');
+            else
+                fprintf(out, " ");
+            if (i % 16 == 7)
+                fprintf(out, " ");
+        }
+        fprintf(out, "\n");
+    }
+    if (length % 16 != 0)
+        fprintf(out, "\n");
+}
+
