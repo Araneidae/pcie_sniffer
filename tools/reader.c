@@ -297,8 +297,9 @@ void process_read(int scon, const char *buf)
     push_error_handling();      // Popped by report_socket_error()
     bool ok =
         DO_PARSE("read request", parse_read_request, buf, &parse)  &&
-        timestamp_to_index(parse.start, &block, &offset)  &&
-        mask_to_archive(parse.read_mask, &iter);
+        timestamp_to_index(parse.start, parse.samples, &block, &offset)  &&
+        mask_to_archive(parse.read_mask, &iter)  &&
+        TEST_OK_(parse.data_source == READ_FA, "Only FA data supported");
 
     if (ok)
         read_fa_data(scon, &iter, block, offset, parse.samples);

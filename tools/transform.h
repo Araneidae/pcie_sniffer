@@ -28,7 +28,8 @@ void get_dd_data(
 /* Converts timestamp into corresponding index, or fails if timestamp is outside
  * the archive. */
 bool timestamp_to_index(
-    uint64_t timestamp, unsigned int *major_block, unsigned int *offset);
+    uint64_t timestamp, unsigned int sample_count,
+    unsigned int *major_block, unsigned int *offset);
 
 /* Returns an unlocked pointer to the header: should only be used to access the
  * constant header fields. */

@@ -25,6 +25,11 @@
 
 #define BUFFER_SIZE     (1 << 16)
 
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+/* Argument parsing. */
+
+
 enum data_format { DATA_FA, DATA_D, DATA_DD };
 
 /* Command line parameters. */
@@ -48,7 +53,7 @@ static void usage(void)
 "Usage: capture [options] <archiver> <capture-mask> [<samples>]\n"
 "\n"
 "Captures sniffer frames from <archiver>, either reading historical data\n"
-"(if -s or -t is used) or live continuous data (if -C is specified).\n"
+"(if -b, -t or -s is given) or live continuous data (if -C is specified).\n"
 "\n"
 "<capture-mask> specifies precisely which BPM ids will be captured.\n"
 "The mask is specified as a comma separated sequence of ranges or BPM ids\n"
@@ -66,12 +71,16 @@ static void usage(void)
 "   -p:  Specify port to connect to on server (default is %d)\n"
 "   -M   Save file in matlab format\n"
 "   -o:  Save output to specified file, otherwise stream to stdout\n"
-"   -s:  Specify start, as a date and time in ISO 8601 format\n"
-"   -t:  Specify start as a time of day today\n"
-"   -C   Request continuous capture from live data stream\n"
 "   -f:  Specify data format, can be -fF for FA (the default), -fd for single\n"
 "        decimated data, or -fD for double decimated data.  Decimated data is\n"
 "        only avaiable for archived data.\n"
+"\n"
+"Precisely one of the following must be given:\n"
+"   -s:  Specify start, as a date and time in ISO 8601 format\n"
+"   -t:  Specify start as a time of day today, or yesterday if Y added to\n"
+"        end, in format hh:mm:ss[Y]\n"
+"   -b:  Specify start as a time in the past as hh:mm:ss\n"
+"   -C   Request continuous capture from live data stream\n"
 "\n"
 "Either a start time or continuous capture must be specified.\n"
 "Note that if -M is specified and continuous capture is interrupted then\n"
@@ -98,6 +107,15 @@ static time_t midnight_today(void)
 }
 
 
+static bool parse_today(const char **string, struct timespec *ts)
+{
+    return
+        parse_time(string, ts)  &&
+        DO_(start.tv_sec += midnight_today())  &&
+        IF_(read_char(string, 'Y'), DO_(start.tv_sec -= 24 * 3600));
+}
+
+
 static bool parse_data_format(char *string)
 {
     if (strcmp(string, "F") == 0)
@@ -112,29 +130,43 @@ static bool parse_data_format(char *string)
 }
 
 
+static bool parse_before(const char **string, struct timespec *ts)
+{
+    return
+        parse_time(string, ts)  &&
+        DO_(ts->tv_sec = time(NULL) - ts->tv_sec);
+}
+
+
+static bool parse_start(
+    bool (*parser)(const char **string, struct timespec *ts),
+    const char *string)
+{
+    return
+        TEST_OK_(!start_specified, "Start already specified")  &&
+        DO_PARSE("start time", parser, string, &start)  &&
+        DO_(start_specified = true);
+}
+
+
+
 static bool parse_opts(int *argc, char ***argv)
 {
     bool ok = true;
     while (ok)
     {
-        switch (getopt(*argc, *argv, "+hMoCf:p:s:t:"))
+        switch (getopt(*argc, *argv, "+hMCo:f:s:t:b:p:"))
         {
             case 'h':   usage();                                    exit(0);
             case 'M':   matlab_format = true;                       break;
-            case 'o':   output_filename = optarg;                   break;
             case 'C':   continuous_capture = true;                  break;
+            case 'o':   output_filename = optarg;                   break;
             case 'f':   ok = parse_data_format(optarg);             break;
+            case 's':   ok = parse_start(parse_datetime, optarg);   break;
+            case 't':   ok = parse_start(parse_today, optarg);      break;
+            case 'b':   ok = parse_start(parse_before, optarg);     break;
             case 'p':
                 ok = DO_PARSE("server port", parse_int, optarg, &port);
-                break;
-            case 's':
-                start_specified = true;
-                ok = DO_PARSE("start time", parse_datetime, optarg, &start);
-                break;
-            case 't':
-                start_specified = true;
-                ok = DO_PARSE("start time", parse_time, optarg, &start);
-                start.tv_sec += midnight_today();
                 break;
             default:
                 fprintf(stderr, "Try `capture -h` for usage\n");
@@ -175,12 +207,17 @@ static bool validate_args(void)
 {
     return
         TEST_OK_(continuous_capture != start_specified,
-            "Must specify precisely one of -s or -C")  &&
+            "Cannot combine continuous and archive capture")  &&
         TEST_OK_(continuous_capture  ||  sample_count > 0,
             "Must specify sample count for historical data")  &&
         TEST_OK_(start_specified  ||  data_format == DATA_FA,
             "Decimated data must be historical");
 }
+
+
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+/* Data capture */
 
 
 static bool connect_server(int *sock)

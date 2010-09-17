@@ -38,6 +38,8 @@ bool read_char(const char **string, char ch);
 /* Like read_char(), but generates an error if ch is not found. */
 bool parse_char(const char **string, char ch);
 
+/* Wraps parsing of a complete string and generation of a suitable error
+ * message. */
 #define DO_PARSE(message, parse, string, result) \
     ( { \
       const char *__string__ = (string); \

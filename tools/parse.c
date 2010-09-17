@@ -134,7 +134,7 @@ bool parse_time(const char **string, struct timespec *ts)
     struct tm tm;
     return
         parse_date_or_time(
-            "%H:%M:%S", "Incomplete time",
+            "%H:%M:%S", "Incomplete time, should be hh:mm:ss",
             string, &tm, &ts->tv_nsec)  &&
         DO_(ts->tv_sec = tm.tm_sec + 60 * (tm.tm_min + 60 * tm.tm_hour));
 }
@@ -145,7 +145,8 @@ bool parse_datetime(const char **string, struct timespec *ts)
     struct tm tm;
     return
         parse_date_or_time(
-            "%Y-%m-%dT%H:%M:%S", "Incomplete date time",
+            "%Y-%m-%dT%H:%M:%S",
+            "Incomplete date time, should be yyyy-mm-ddThh:mm:ss",
             string, &tm, &ts->tv_nsec)  &&
         /* Convert tm value into seconds for return.  Note that the more
          * standard function to use here is mktime(), but that depends on the

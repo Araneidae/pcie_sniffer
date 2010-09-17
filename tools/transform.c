@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
+#include <inttypes.h>
 #include <math.h>
 #include <pthread.h>
 #include <errno.h>
@@ -420,7 +421,8 @@ void get_dd_data(
 
 
 bool timestamp_to_index(
-    uint64_t timestamp, unsigned int *major_block, unsigned int *offset)
+    uint64_t timestamp, unsigned int sample_count,
+    unsigned int *major_block, unsigned int *offset)
 {
     bool ok;
     LOCK(transform_lock);
@@ -446,13 +448,14 @@ bool timestamp_to_index(
             low = mid;
     }
 
-    /* Compute the raw offset.  If we fall off the end of the selected block
-     * (perhaps there's a capture gap) simply skip to the following block. */
     uint64_t block_start = data_index[low].timestamp;
     int duration = data_index[low].duration;
     ok = TEST_OK_(duration > 0, "Timestamp not in index");
     if (ok)
     {
+        /* Compute the raw offset.  If we fall off the end of the selected block
+         * (perhaps there's a capture gap) simply skip to the following block.
+         * Note that this can push us to an invalid timestamp. */
         uint64_t raw_offset =
             (timestamp - block_start) * header->major_sample_count /
             data_index[low].duration;
@@ -462,12 +465,18 @@ bool timestamp_to_index(
             raw_offset = 0;
         }
 
-        /* Store the results and validate the timestamp. */
+        /* Store the results and validate the timestamp and sample count. */
         *major_block = low;
         *offset = (int) raw_offset;
+        int block_count = current > low ? current - low : N - low + current;
+        uint64_t samples_available =
+            (uint64_t) block_count * header->major_sample_count - raw_offset;
         ok =
             TEST_OK_(low != current, "Timestamp too late")  &&
-            TEST_OK_(timestamp >= block_start, "Timestamp too early");
+            TEST_OK_(timestamp >= block_start, "Timestamp too early")  &&
+            TEST_OK_(sample_count <= samples_available,
+                "Only %"PRIu64" samples of %d requested available",
+                samples_available, sample_count);
     }
 
     UNLOCK(transform_lock);
