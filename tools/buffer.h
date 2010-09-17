@@ -56,6 +56,8 @@ bool release_read_block(struct reader_state *reader);
  * and forcing further calls to get_read_block() to return NULL. */
 void stop_reader(struct reader_state *reader);
 
+/* Can be used to temporarily halt or resume buffered writing. */
+void enable_buffer_write(bool enabled);
 
 /* Returns the average frame rate in Hz. */
 double get_mean_frame_rate(void);

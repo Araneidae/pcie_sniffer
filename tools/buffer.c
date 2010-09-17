@@ -148,7 +148,6 @@ const void * get_read_block(
     }
     else
     {
-
         /* If we're on the tail of the writer then we have to wait for a new
          * entry in the buffer. */
         while (reader->running  &&  reader->index_out == buffer_index_in)
@@ -245,7 +244,8 @@ static void update_mean_frame_rate(bool valid, struct timespec *ts)
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 /* Writer routines.                                                          */
 
-static bool in_gap = true;         // Used to coalesce repeated gaps
+static bool write_blocked = false;  // Used to halt writes for debugging
+static bool in_gap = true;          // Used to coalesce repeated gaps
 
 /* Checks for the presence of a blocking reserved reader. */
 static bool blocking_readers(void)
@@ -261,6 +261,8 @@ void * get_write_block(void)
 {
     void *buffer;
     LOCK(lock);
+    while (write_blocked)
+        pwait(&lock);
     if (blocking_readers())
         /* There's a reserved reader not finished with the next block yet.
          * Bail and try again later. */
@@ -306,6 +308,14 @@ void release_write_block(bool gap)
     UNLOCK(lock);
 }
 
+
+void enable_buffer_write(bool enabled)
+{
+    LOCK(lock);
+    write_blocked = !enabled;
+    psignal(&lock);
+    UNLOCK(lock);
+}
 
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */

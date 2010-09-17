@@ -43,9 +43,14 @@ static void __attribute__((format(printf, 2, 3)))
  *  CQ      Closes archive server
  *  CS      Prints a simple status report
  *  CF      Returns current sample frequency
+ *  CT      Returns earliest available timestamp
+ *  CH      Halts data capture (only sensible for debug use)
+ *  CR      Resumes halted data capture
  */
 static void process_command(int scon, const char *buf)
 {
+    bool ok = true;
+    push_error_handling();
     switch (buf[1])
     {
         case 'Q':
@@ -56,12 +61,27 @@ static void process_command(int scon, const char *buf)
             write_string(scon, "%f\n", get_mean_frame_rate());
             break;
         case 'S':
-            TEST_OK_(false, "Status not implemented");
+            ok = TEST_OK_(false, "Status not implemented");
             break;
+        case 'H':
+            log_message("Temporary halt command received");
+            enable_buffer_write(false);
+            break;
+        case 'R':
+            log_message("Resume command received");
+            enable_buffer_write(true);
+            break;
+        case 'T':
         default:
-            TEST_OK_(false, "Unknown command");
+            ok = TEST_OK_(false, "Unknown command");
             break;
     }
+
+    char *error_message;
+    pop_error_handling(&error_message);
+    if (!ok)
+        write_string(scon, "%s\n", error_message);
+    free(error_message);
 }
 
 

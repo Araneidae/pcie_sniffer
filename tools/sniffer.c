@@ -44,8 +44,8 @@ static void dummy_data(void *data, int block_size)
             {
                 uint32_t int_phase = dummy_t * j * 7000;
                 double phase = 2 * M_PI * int_phase / (double) ULONG_MAX;
-                output->x = (int32_t) 5000 * sin(phase);
-                output->y = (int32_t) 5000 * cos(phase);
+                output->x = (int32_t) 50000 * sin(phase);
+                output->y = (int32_t) 50000 * cos(phase);
             }
             output ++;
         }
@@ -59,8 +59,16 @@ static void * dummy_sniffer_thread(void *context)
     while (true)
     {
         void *buffer = get_write_block();
-        dummy_data(buffer, fa_block_size);
-        release_write_block(false);
+        if (buffer == NULL)
+        {
+            log_message("dummy sniffer unable to write block");
+            sleep(1);
+        }
+        else
+        {
+            dummy_data(buffer, fa_block_size);
+            release_write_block(false);
+        }
     }
     return NULL;
 }

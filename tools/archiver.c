@@ -78,6 +78,7 @@ static void usage(void)
 "    -p:  Write PID to specified file\n"
 "    -s:  Specify server socket (default 8888)\n"
 "    -F   Run dummy sniffer with dummy data.\n"
+"    -H   Start archiver in halted state (debug only)\n"
         , argv0, buffer_blocks);
 }
 
@@ -88,7 +89,7 @@ static bool process_options(int *argc, char ***argv)
     bool ok = true;
     while (ok)
     {
-        switch (getopt(*argc, *argv, "+hd:b:vDp:s:F"))
+        switch (getopt(*argc, *argv, "+hd:b:vDp:s:FH"))
         {
             case 'h':   usage();                                    exit(0);
             case 'd':   fa_sniffer_device = optarg;                 break;
@@ -96,6 +97,7 @@ static bool process_options(int *argc, char ***argv)
             case 'D':   daemon_mode = true;                         break;
             case 'p':   pid_filename = optarg;                      break;
             case 'F':   fa_sniffer_device = NULL;                   break;
+            case 'H':   enable_buffer_write(false);                 break;
             case 'b':
                 ok = DO_PARSE("buffer blocks",
                     parse_uint, optarg, &buffer_blocks);
