@@ -97,7 +97,7 @@ static void close_disk(void)
  * interlocked with this thread so that reading is blocked while a write is
  * currently in progress. */
 
-DECLARE_LOCKING(lock);
+DECLARE_LOCKING(writer_lock);
 
 /* Current write request. */
 static bool writing_active = false;
@@ -109,41 +109,41 @@ static void * writer_thread(void *context)
 {
     while (writer_running)
     {
-        LOCK(lock);
+        LOCK(writer_lock);
         while (!writing_active)
-            wait(&lock);
-        UNLOCK(lock);
+            pwait(&writer_lock);
+        UNLOCK(writer_lock);
 
         ASSERT_IO(lseek(disk_fd, writing_offset, SEEK_SET));
         ASSERT_write(disk_fd, writing_block, writing_length);
 
-        LOCK(lock);
+        LOCK(writer_lock);
         writing_active = false;
-        signal(&lock);
-        UNLOCK(lock);
+        psignal(&writer_lock);
+        UNLOCK(writer_lock);
     }
     return NULL;
 }
 
 void schedule_write(off64_t offset, void *block, size_t length)
 {
-    LOCK(lock);
+    LOCK(writer_lock);
     while (writing_active)
-        wait(&lock);
+        pwait(&writer_lock);
     writing_offset = offset;
     writing_block = block;
     writing_length = length;
     writing_active = true;
-    signal(&lock);
-    UNLOCK(lock);
+    psignal(&writer_lock);
+    UNLOCK(writer_lock);
 }
 
 void request_read(void)
 {
-    LOCK(lock);
+    LOCK(writer_lock);
     while (writing_active)
-        wait(&lock);
-    UNLOCK(lock);
+        pwait(&writer_lock);
+    UNLOCK(writer_lock);
 }
 
 

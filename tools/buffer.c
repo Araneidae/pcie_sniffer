@@ -152,7 +152,7 @@ const void * get_read_block(
         /* If we're on the tail of the writer then we have to wait for a new
          * entry in the buffer. */
         while (reader->running  &&  reader->index_out == buffer_index_in)
-            wait(&lock);
+            pwait(&lock);
         if (!reader->running)
             buffer = NULL;
         else if (frame_info[reader->index_out].gap)
@@ -184,7 +184,7 @@ void stop_reader(struct reader_state *reader)
 {
     LOCK(lock);
     reader->running = false;
-    signal(&lock);
+    psignal(&lock);
     UNLOCK(lock);
 }
 
@@ -302,7 +302,7 @@ void release_write_block(bool gap)
         else
             update_backlog(reader);
     }
-    signal(&lock);
+    psignal(&lock);
     UNLOCK(lock);
 }
 
