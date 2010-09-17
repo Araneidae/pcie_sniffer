@@ -94,8 +94,8 @@ struct disk_header {
     /* All the parameters above remain fixed during the operation of the
      * archiver, the parameters below are updated dynamically. */
 
-    uint32_t current_major_block; // This block is being written
-    uint32_t last_duration;
+    uint32_t current_major_block;   // This block is being written
+    uint32_t last_duration;         // Time for last major block in microseconds
 };
 
 

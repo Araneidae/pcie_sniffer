@@ -15,6 +15,7 @@
 #include <signal.h>
 #include <errno.h>
 #include <time.h>
+#include <math.h>
 
 #include "error.h"
 #include "sniffer.h"
@@ -24,10 +25,6 @@
 
 
 #define BUFFER_SIZE     (1 << 16)
-
-
-/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-/* Argument parsing. */
 
 
 enum data_format { DATA_FA, DATA_D, DATA_DD };
@@ -44,9 +41,92 @@ static struct timespec start;
 static unsigned int sample_count = 0;
 static enum data_format data_format = DATA_FA;
 static unsigned int data_mask = 1;
-static bool show_progress = false;
+static bool show_progress = true;
+
+/* Archiver parameters read from archiver during initialisation. */
+static double sample_frequency;
+static int first_decimation;
+static int second_decimation;
 
 static int output_file = STDOUT_FILENO;
+
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+/* Server connection core. */
+
+
+/* Connnects to the server. */
+static bool connect_server(int *sock)
+{
+    struct sockaddr_in s_in = {
+        .sin_family = AF_INET,
+        .sin_addr.s_addr = INADDR_ANY,
+        .sin_port = htons(port)
+    };
+    struct hostent *hostent;
+    return
+        TEST_NULL_(
+            hostent = gethostbyname(server_name),
+            "Unable to resolve server \"%s\"", server_name)  &&
+        DO_(memcpy(
+            &s_in.sin_addr.s_addr, hostent->h_addr, hostent->h_length))  &&
+        TEST_IO(*sock = socket(AF_INET, SOCK_STREAM, 0))  &&
+        TEST_IO_(
+            connect(*sock, (struct sockaddr *) &s_in, sizeof(s_in)),
+            "Unable to connect to server %s:%d", server_name, port);
+}
+
+
+/* Reads a complete (short) response from the server until end of input, fails
+ * if buffer overflows (or any other reason). */
+static bool read_response(int sock, char *buf, size_t buflen)
+{
+    ssize_t rx;
+    bool ok;
+    while (
+        ok =
+            TEST_OK_(buflen > 0, "Read buffer exhausted")  &&
+            TEST_IO(rx = read(sock, buf, buflen)),
+        ok  &&  rx > 0)
+    {
+        buflen -= rx;
+        buf += rx;
+    }
+    if (ok)
+        *buf = '\0';
+    return ok;
+}
+
+
+static bool parse_archive_parameters(const char **string, void *_)
+{
+    return
+        parse_double(string, &sample_frequency)  &&
+        parse_char(string, '\n')  &&
+        parse_int(string, &first_decimation)  &&
+        parse_char(string, '\n')  &&
+        parse_int(string, &second_decimation)  &&
+        parse_char(string, '\n');
+}
+
+static bool read_archive_parameters(void)
+{
+    int sock;
+    char buffer[64];
+    return
+        connect_server(&sock)  &&
+        TEST_write(sock, "CFdD\n", 5)  &&
+        FINALLY(
+            read_response(sock, buffer, sizeof(buffer)),
+            // Finally, whether read_response succeeds
+            TEST_IO(close(sock)))  &&
+        DO_PARSE("server response",
+            parse_archive_parameters, buffer, NULL);
+}
+
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+/* Argument parsing. */
 
 
 static void usage(void)
@@ -80,7 +160,7 @@ static void usage(void)
 "        for archived data.\n"
 "           The bits in the data mask correspond to decimated fields:\n"
 "            1 => mean, 2 => min, 4 => max, 8 => standard deviation\n"
-"   -P   Show progress of capture on stderr\n"
+"   -q   Suppress display of progress of capture on stderr\n"
 "\n"
 "Either a start time or continuous capture must be specified, and so\n"
 "precisely one of the following must be given:\n"
@@ -178,14 +258,14 @@ static bool parse_opts(int *argc, char ***argv)
     bool ok = true;
     while (ok)
     {
-        switch (getopt(*argc, *argv, "+hMCo:S:Ps:t:b:p:f:"))
+        switch (getopt(*argc, *argv, "+hMCo:S:qs:t:b:p:f:"))
         {
             case 'h':   usage();                                    exit(0);
             case 'M':   matlab_format = true;                       break;
             case 'C':   continuous_capture = true;                  break;
             case 'o':   output_filename = optarg;                   break;
             case 'S':   server_name = optarg;                       break;
-            case 'P':   show_progress = true;                       break;
+            case 'q':   show_progress = false;                      break;
             case 's':   ok = parse_start(parse_datetime, optarg);   break;
             case 't':   ok = parse_start(parse_today, optarg);      break;
             case 'b':   ok = parse_start(parse_before, optarg);     break;
@@ -213,8 +293,17 @@ static bool parse_samples(const char **string, unsigned int *result)
 {
     bool ok = parse_uint(string, result);
     if (ok  &&  read_char(string, 's'))
-        *result *= 10072;
-    return ok;
+    {
+        *result = (unsigned int) round(*result * sample_frequency);
+        switch (data_format)
+        {
+            /* Deliberate fall-through in all three cases. */
+            case DATA_DD:   *result /= second_decimation;
+            case DATA_D:    *result /= first_decimation;
+            case DATA_FA:   ;
+        }
+    }
+    return ok  &&  TEST_OK_(*result > 0, "Zero sample count");
 }
 
 
@@ -225,6 +314,7 @@ static bool parse_args(int argc, char **argv)
         TEST_OK_(argc == 1  ||  argc == 2,
             "Wrong number of arguments.  Try `capture -h` for help.")  &&
         DO_PARSE("capture mask", parse_mask, argv[0], capture_mask)  &&
+        read_archive_parameters()  &&
         IF_(argc == 2,
             DO_PARSE("sample count", parse_samples, argv[1], &sample_count));
 }
@@ -245,27 +335,6 @@ static bool validate_args(void)
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 /* Data capture */
-
-
-static bool connect_server(int *sock)
-{
-    struct sockaddr_in sin = {
-        .sin_family = AF_INET,
-        .sin_addr.s_addr = INADDR_ANY,
-        .sin_port = htons(port)
-    };
-    struct hostent *hostent;
-    return
-        TEST_NULL_(
-            hostent = gethostbyname(server_name),
-            "Unable to resolve server \"%s\"", server_name)  &&
-        DO_(memcpy(
-            &sin.sin_addr.s_addr, hostent->h_addr, hostent->h_length))  &&
-        TEST_IO(*sock = socket(AF_INET, SOCK_STREAM, 0))  &&
-        TEST_IO_(
-            connect(*sock, (struct sockaddr *) &sin, sizeof(sin)),
-            "Unable to connect to server %s:%d", server_name, port);
-}
 
 
 static volatile bool running = true;

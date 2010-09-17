@@ -201,47 +201,6 @@ bool release_read_block(struct reader_state *reader)
 
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-/* Frame rate computation.                                                   */
-
-#define NOMINAL_FRAME_RATE      10072.0
-static double mean_frame_rate = NOMINAL_FRAME_RATE;
-static struct timespec last_ts;
-static bool last_ts_valid;
-#define FRAME_RATE_IIR      1e-3
-
-double get_mean_frame_rate(void)
-{
-    return mean_frame_rate;
-}
-
-static void update_mean_frame_rate(bool valid, struct timespec *ts)
-{
-    /* Only update the frame rate when we have a valid interval, and don't
-     * reset it across a gap as the old mean is likely to be good. */
-    if (valid && last_ts_valid)
-    {
-        /* Work out the frame rate from the last timestamp.  We can safely
-         * assume that both timestamps are within a second of each other (if
-         * not there's a much more serious problem elsewhere, and we really
-         * don't care here!) */
-        long nsec = ts->tv_nsec - last_ts.tv_nsec;
-        if (nsec < 0)
-            nsec += 1000000000;
-        int frame_count = fa_block_size / FA_FRAME_SIZE;
-        double frame_rate = 1e9 * frame_count / nsec;
-
-        mean_frame_rate =
-            (1 - FRAME_RATE_IIR) * mean_frame_rate +
-            FRAME_RATE_IIR * frame_rate;
-    }
-
-    last_ts = *ts;
-    last_ts_valid = valid;
-}
-
-
-
-/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 /* Writer routines.                                                          */
 
 static bool write_blocked = false;  // Used to halt writes for debugging
@@ -287,7 +246,6 @@ void release_write_block(bool gap)
      * frame. */
     struct timespec ts;
     ASSERT_IO(clock_gettime(CLOCK_REALTIME, &ts));
-    update_mean_frame_rate(!gap, &ts);
 
     LOCK(lock);
     frame_info[buffer_index_in].gap = gap;

@@ -59,9 +59,6 @@ void stop_reader(struct reader_state *reader);
 /* Can be used to temporarily halt or resume buffered writing. */
 void enable_buffer_write(bool enabled);
 
-/* Returns the average frame rate in Hz. */
-double get_mean_frame_rate(void);
-
 
 /* The block size (in bytes) used by the buffer is a global variable
  * initialised by initialise_buffer and left constant thereafter. */

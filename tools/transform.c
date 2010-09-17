@@ -22,6 +22,9 @@
 #include "disk.h"
 
 
+// !!! should be disk header parameter
+#define TIMESTAMP_IIR   0.1
+
 
 /* Archiver header with core parameter. */
 static struct disk_header *header;
@@ -376,7 +379,12 @@ static void advance_index(void)
     /* Starting timestamp is computed at t=-timestamp_count-1 from centre. */
     ix->timestamp = first_timestamp +
         sum_x / timestamp_count - (timestamp_count + 1) * sum_xt / sum_t2;
-    header->last_duration = ix->duration;
+
+    /* For the last duration we run an IIR to smooth out the bumps in our
+     * timestamp calculations.  This gives us another digit or so. */
+    header->last_duration = (uint32_t) round(
+        ix->duration * TIMESTAMP_IIR +
+        header->last_duration * (1 - TIMESTAMP_IIR));
 
     /* All done, advance the block index and reset our index. */
     header->current_major_block =
