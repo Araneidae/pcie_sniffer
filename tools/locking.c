@@ -1,6 +1,7 @@
 /* Simple thread locking. */
 
 #include <stdbool.h>
+#include <stdio.h>
 #include <errno.h>
 #include <stdarg.h>
 #include <pthread.h>
