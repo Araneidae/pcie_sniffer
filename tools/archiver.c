@@ -28,10 +28,12 @@
 
 
 #define K               1024
-/* A good default memory buffer size is 256MB. */
-#define BUFFER_SIZE     (256 * K * K)
 
-/* Default IO block size. */
+/* Circular buffer between FA device and consumers.  The correct size here is a
+ * little delicate... */
+#define BUFFER_BLOCKS   64
+
+/* Default IO block size, only used if running without archiver. */
 #define DEFAULT_BLOCK_SIZE  (512 * K)
 
 
@@ -52,7 +54,7 @@ static char *output_filename = NULL;
  *      kill $(cat $pid_filename)   */
 static char *pid_filename = NULL;
 /* In memory buffer. */
-static uint32_t buffer_size = BUFFER_SIZE;
+static unsigned int buffer_blocks = BUFFER_BLOCKS;
 /* Socket used for serving remote connections. */
 static int server_socket = 8888;
 /* True if archiving to disk, false if only serving live subscription data. */
@@ -70,13 +72,13 @@ static void usage(void)
 "\n"
 "Options:\n"
 "    -d:  Specify device to use for FA sniffer (default /dev/fa_sniffer0)\n"
-"    -b:  Specify buffer size (default 128M bytes)\n"
+"    -b:  Specify number of buffered input blocks (default %u)\n"
 "    -v   Specify verbose output\n"
 "    -D   Run as a daemon\n"
 "    -p:  Write PID to specified file\n"
 "    -s:  Specify server socket (default 8888)\n"
 "    -F   Run dummy sniffer with dummy data.\n"
-        , argv0);
+        , argv0, buffer_blocks);
 }
 
 
@@ -95,8 +97,8 @@ static bool process_options(int *argc, char ***argv)
             case 'p':   pid_filename = optarg;                      break;
             case 'F':   fa_sniffer_device = NULL;                   break;
             case 'b':
-                ok = DO_PARSE("buffer size",
-                    parse_size32, optarg, &buffer_size);
+                ok = DO_PARSE("buffer blocks",
+                    parse_uint, optarg, &buffer_blocks);
                 break;
             case 's':
                 ok = DO_PARSE("server socket",
@@ -226,7 +228,7 @@ int main(int argc, char **argv)
         /* All the thread initialisation must be done after daemonising, as of
          * course threads don't survive across the daemon() call!  Alas, this
          * means that many startup errors go into syslog rather than stderr. */
-        initialise_buffer(input_block_size, buffer_size / input_block_size)  &&
+        initialise_buffer(input_block_size, buffer_blocks)  &&
         IF_(archiving,
             start_disk_writer())  &&
         initialise_sniffer(fa_sniffer_device)  &&
