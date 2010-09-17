@@ -5,6 +5,8 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
+#include <pthread.h>
+#include <errno.h>
 #include <xmmintrin.h>
 
 #include "error.h"
@@ -12,6 +14,7 @@
 #include "mask.h"
 #include "transform.h"
 #include "disk_writer.h"
+#include "locking.h"
 
 #include "disk.h"
 
@@ -21,11 +24,16 @@
 static struct disk_header *header;
 /* Archiver index. */
 static struct data_index *data_index;
+/* Area to write DD data. */
+static struct decimated_data *dd_area;
 
-/* Number of samples in a single input block. */
+/* Numbers of normal and decimated samples in a single input block. */
 static int input_frame_count;
 static int input_decimation_count;
 
+/* Lock used to protect access to the archive: protects the variable part of the
+ * index, the data index and the dd area. */
+DECLARE_LOCKING(lock);
 
 
 
@@ -230,8 +238,6 @@ static void decimate_block(const void *read_block)
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 /* Double data decimation. */
 
-/* Area to write DD data. */
-static struct decimated_data *dd_area;
 /* Current offset into DD data area. */
 unsigned int dd_offset;
 
@@ -381,6 +387,11 @@ static void initialise_index(void)
 
 void process_block(const void *block, struct timespec *ts)
 {
+    /* This lock is arguably a little broad: in particular, we hold the lock
+     * while calling write_major_block(), which in turn captures a lock.
+     * Fortunately these locks nest in one direction only, and this isn't a bad
+     * place in which to be blocked ... waiting for a write to complete. */
+    LOCK(lock);
     if (block)
     {
         index_minor_block(block, ts);
@@ -404,6 +415,98 @@ void process_block(const void *block, struct timespec *ts)
         reset_index();
         dd_offset = header->current_major_block * header->dd_sample_count;
     }
+    UNLOCK(lock);
+}
+
+
+int get_block_index(void)
+{
+    int ix;
+    LOCK(lock);
+    ix = header->current_major_block;
+    UNLOCK(lock);
+    return ix;
+}
+
+
+void get_index_blocks(int ix, int samples, struct data_index *result)
+{
+    LOCK(lock);
+    memcpy(result, data_index + ix, sizeof(struct data_index) * samples);
+    UNLOCK(lock);
+}
+
+
+void get_dd_data(
+    int dd_index, int id, int samples, struct decimated_data *result)
+{
+    LOCK(lock);
+    struct decimated_data *start =
+        dd_area + header->dd_total_count * id + dd_index;
+    memcpy(result, start, sizeof(struct decimated_data) * samples);
+    UNLOCK(lock);
+}
+
+
+bool timestamp_to_index(uint64_t timestamp, int *major_block, int *offset)
+{
+    bool ok;
+    LOCK(lock);
+
+    int N = header->major_block_count;
+    int current = header->current_major_block;
+
+    /* Binary search to find major block corresponding to timestamp.  Note that
+     * the high block is never inspected, which is just as well, as the current
+     * block is invariably invalid. */
+    int low  = (current + 1) % N;
+    int high = current;
+    while ((low + 1) % N != high)
+    {
+        int mid;
+        if (low < high)
+            mid = (low + high) / 2;
+        else
+            mid = ((low + high + N) / 2) % N;
+        if (timestamp < data_index[mid].timestamp)
+            high = mid;
+        else
+            low = mid;
+    }
+
+    /* Compute the raw offset.  If we fall off the end of the selected block
+     * (perhaps there's a capture gap) simply skip to the following block. */
+    uint64_t block_start = data_index[low].timestamp;
+    int duration = data_index[low].duration;
+    ok = TEST_OK_(duration > 0, "Invalid index entry");
+    if (ok)
+    {
+        uint64_t raw_offset =
+            (timestamp - block_start) * header->major_sample_count /
+            data_index[low].duration;
+        if (raw_offset >= header->major_sample_count)
+        {
+            low = (low + 1) % N;
+            raw_offset = 0;
+        }
+
+        /* Store the results and validate the timestamp. */
+        *major_block = low;
+        *offset = (int) raw_offset;
+        ok =
+            TEST_OK_(low != current, "Timestamp too late")  &&
+            TEST_OK_(timestamp >= block_start, "Timestamp too early");
+    }
+
+    UNLOCK(lock);
+    return ok;
+}
+
+
+
+const struct disk_header *get_header(void)
+{
+    return header;
 }
 
 
