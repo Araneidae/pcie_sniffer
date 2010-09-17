@@ -33,7 +33,7 @@ static bool page_aligned(uint64_t offset, const char *description)
 {
     uint32_t page_size = sysconf(_SC_PAGESIZE);
     return TEST_OK_(offset % page_size == 0,
-        "Bad page alignment for %s", description);
+        "Bad page alignment for %s at %"PRIu64, description, offset);
 }
 
 
@@ -145,38 +145,56 @@ bool validate_header(struct disk_header *header, uint64_t file_size)
         TEST_OK_(
             count_mask_bits(header->archive_mask) ==
                 header->archive_mask_count,
-            "Inconsistent archive mask")  &&
+            "Inconsistent archive mask: %d != %"PRIu32,
+                count_mask_bits(header->archive_mask),
+                header->archive_mask_count)  &&
         TEST_OK_(header->archive_mask_count > 0, "Empty capture mask")  &&
         TEST_OK_(header->total_data_size <= file_size,
-            "Data size in header larger than file size")  &&
+            "Data size in header larger than file size: %"PRIu64" > %"PRIu64,
+            header->total_data_size, file_size)  &&
 
         /* Data parameter validation. */
         TEST_OK_(
             header->d_sample_count * header->first_decimation ==
             header->major_sample_count,
-            "Invalid first decimation")  &&
+            "Invalid first decimation: %"PRIu32" * %"PRIu32" != %"PRIu32,
+                header->d_sample_count, header->first_decimation,
+                header->major_sample_count)  &&
         TEST_OK_(
             header->dd_sample_count * header->second_decimation ==
             header->d_sample_count,
-            "Invalid second decimation")  &&
+            "Invalid second decimation: %"PRIu32" * %"PRIu32" != %"PRIu32,
+                header->dd_sample_count, header->second_decimation,
+                header->d_sample_count)  &&
         TEST_OK_(
             header->archive_mask_count * (
                 header->major_sample_count * FA_ENTRY_SIZE +
                 header->d_sample_count * sizeof(struct decimated_data)) ==
             header->major_block_size,
-            "Invalid major block size")  &&
+            "Invalid major block size: "
+            "%"PRIu32" * (%"PRIu32" * %d + %"PRIu32" * %d) != %"PRIu32,
+                header->archive_mask_count,
+                header->major_sample_count, FA_ENTRY_SIZE,
+                header->d_sample_count, sizeof(struct decimated_data),
+                header->major_block_size)  &&
         TEST_OK_(
             header->major_block_count * sizeof(struct data_index) <=
             header->index_data_size,
-            "Invalid index block size")  &&
+            "Invalid index block size: %"PRIu32" * %d > %"PRIu32,
+                header->major_block_count, sizeof(struct data_index),
+                header->index_data_size)  &&
         TEST_OK_(
             header->dd_sample_count * header->major_block_count ==
                 header->dd_total_count,
-            "Invalid total DD count")  &&
+            "Invalid total DD count: %"PRIu32" * %"PRIu32" != %"PRIu32,
+                header->dd_sample_count, header->major_block_count,
+                header->dd_total_count)  &&
         TEST_OK_(
             header->dd_total_count * header->archive_mask_count *
                 sizeof(struct decimated_data) <= header->dd_data_size,
-            "DD area too small")  &&
+            "DD area too small: %"PRIu32" * %"PRIu32" * %d > %"PRIu32,
+                header->dd_total_count, header->archive_mask_count,
+                sizeof(struct decimated_data), header->dd_data_size)  &&
 
         /* Check page alignment. */
         page_aligned(header->index_data_size, "index size")  &&
@@ -188,48 +206,56 @@ bool validate_header(struct disk_header *header, uint64_t file_size)
 
         /* Check data areas. */
         TEST_OK_(header->index_data_start >= DISK_HEADER_SIZE,
-            "Unexpected index data start")  &&
+            "Unexpected index data start: %"PRIu64" < %d",
+            header->index_data_start, DISK_HEADER_SIZE)  &&
         TEST_OK_(
             header->dd_data_start >=
             header->index_data_start + header->index_data_size,
-            "Unexpected DD data start")  &&
+            "Unexpected DD data start: %"PRIu64" < %"PRIu64" + %"PRIu32,
+                header->dd_data_start,
+                header->index_data_start, header->index_data_size)  &&
         TEST_OK_(
             header->major_data_start >=
             header->dd_data_start + header->dd_data_size,
-            "Unexpected major data start")  &&
+            "Unexpected major data start: %"PRIu64" < %"PRIu64" + %"PRIu32,
+                header->major_data_start,
+                header->dd_data_start, header->dd_data_size)  &&
         TEST_OK_(
             header->total_data_size >=
             header->major_data_start +
-            header->major_block_count * header->major_block_size,
-            "Data area too small for data")  &&
+            (uint64_t) header->major_block_count * header->major_block_size,
+            "Data area too small for data: "
+            "%"PRIu64" < %"PRIu64" + %"PRIu32" * %"PRIu32,
+                header->total_data_size,
+                header->major_data_start,
+                header->major_block_count, header->major_block_size)  &&
         TEST_OK_(
             header->index_data_size >=
             header->major_block_count * sizeof(struct data_index),
-            "Index area too small")  &&
+            "Index area too small: %"PRIu32" < %"PRIu32" * %d",
+                header->index_data_size,
+                header->major_block_count, sizeof(struct data_index))  &&
 
         /* Major data layout validation. */
         TEST_OK_(
             header->first_decimation > 1  &&  header->second_decimation > 1,
-            "Decimation too small")  &&
+            "Decimation too small: %"PRIu32", %"PRIu32,
+                header->first_decimation, header->second_decimation)  &&
         TEST_OK_(
             header->major_sample_count > 1, "Output block size too small")  &&
         TEST_OK_(header->major_block_count > 1, "Data file too small")  &&
         TEST_OK_(
             header->input_block_size % FA_FRAME_SIZE == 0,
-            "Input block size must be a multiple of FA frame size")  &&
+            "Input block size doesn't match frame size: %"PRIu32", %d",
+                header->input_block_size, FA_FRAME_SIZE == 0)  &&
         TEST_OK_(
             header->major_sample_count % input_sample_count == 0,
-            "Input and output block sizes don't match properly")  &&
-        TEST_OK_(
-            header->major_sample_count % header->first_decimation == 0,
-            "Invalid first decimation")  &&
-        TEST_OK_(
-            header->major_sample_count % (
-                header->first_decimation * header->second_decimation) == 0,
-            "Decimation must fit into a complete major block")  &&
+            "Input and major block sizes don't match: %"PRIu32", %d",
+                header->major_sample_count, input_sample_count)  &&
 
         TEST_OK_(header->current_major_block < header->major_block_count,
-            "Invalid current index");
+            "Invalid current index: %"PRIu32" >= %"PRIu32,
+            header->current_major_block, header->major_block_count);
 }
 
 
@@ -240,10 +266,9 @@ void print_header(FILE *out, struct disk_header *header)
     fprintf(out,
         "FA sniffer archive: %.7s, v%d.\n"
         "Archiving: %s\n"
-        "Decimation %"PRIu32", %"PRIu32" => %"PRIu32", "
-            "recording %u BPMs\n"
+        "Decimation %"PRIu32", %"PRIu32" => %"PRIu32", recording %u BPMs\n"
         "Input block size = %"PRIu32" bytes, %"PRIu32" frames\n"
-        "Output block size = %"PRIu32" bytes, %"PRIu32" samples\n"
+        "Major block size = %"PRIu32" bytes, %"PRIu32" samples\n"
         "Total size = %"PRIu32" major blocks = %"PRIu32" samples"
             " = %"PRIu64" bytes\n"
         "Index data from %"PRIu64" for %"PRIu32" bytes\n"
