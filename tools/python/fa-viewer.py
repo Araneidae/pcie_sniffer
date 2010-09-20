@@ -139,6 +139,7 @@ char_sqrt   = u'\u221A'             # Square root sign
 char_cdot   = u'\u22C5'             # Centre dot
 
 micrometre  = char_mu + 'm'
+squared     = u'\u00B2'              # Superscript 2
 
 
 class mode_common:
@@ -329,13 +330,14 @@ class mode_fft(mode_common):
     yname = 'Amplitude'
     xshortname = 'f'
     xunits = 'kHz'
-    yunits = '%s/%sHz' % (micrometre, char_sqrt)
+    yunits_normal = '%s/%sHz' % (micrometre, char_sqrt)
+    yunits_squared = '%s%s/Hz' % (micrometre, squared)
     xscale = Qwt5.QwtLinearScaleEngine
     yscale = Qwt5.QwtLog10ScaleEngine
     xticks = 5
     xmin = 0
     xmax = 1e-3 * F_S / 2
-    ymin = 1e-4
+    ymin_normal = 1e-4
     ymax = 1
 
     Decimations = [1, 10, 100]
@@ -345,6 +347,11 @@ class mode_fft(mode_common):
         self.selector = decimation(
             parent, self.Decimations, lambda d: 1000 * d <= self.timebase,
             self.set_decimation)
+        self.squared = QtGui.QCheckBox(
+            '%s%s/Hz' % (micrometre, squared), parent.ui)
+        parent.ui.bottom_row.insertWidget(0, self.squared)
+        parent.connect(self.squared, 'stateChanged(int)', self.set_squared)
+        self.set_squared_state(False)
         self.set_enable(False)
         self.decimation = self.selector.decimation
 
@@ -354,14 +361,28 @@ class mode_fft(mode_common):
 
     def set_enable(self, enabled):
         self.selector.set_enable(enabled)
+        self.squared.setVisible(enabled)
 
     def set_decimation(self, decimation):
         self.decimation = decimation
         self.xaxis = fft_timebase(self.timebase // self.decimation, 1e-3)
 
+    def set_squared_state(self, show_squared):
+        self.show_squared = show_squared
+        if show_squared:
+            self.yunits = self.yunits_squared
+            self.ymin = self.ymin_normal ** 2
+        else:
+            self.yunits = self.yunits_normal
+            self.ymin = self.ymin_normal
+
+    def set_squared(self, squared):
+        self.set_squared_state(squared != 0)
+        self.parent.reset_mode()
+
     def compute(self, value):
         if self.decimation == 1:
-            return scaled_abs_fft(value)
+            result = scaled_abs_fft(value)
         else:
             # Compute a decimated fft by segmenting the waveform (by reshaping),
             # computing the fft of each segment, and computing the mean power of
@@ -369,7 +390,11 @@ class mode_fft(mode_common):
             N = len(value)
             value = value.reshape((self.decimation, N//self.decimation, 2))
             fft = scaled_abs_fft(value, axis=1)
-            return numpy.sqrt(numpy.mean(fft**2, axis=0))
+            result = numpy.sqrt(numpy.mean(fft**2, axis=0))
+        if self.show_squared:
+            return result ** 2
+        else:
+            return result
 
 
 def compute_gaps(l, N):

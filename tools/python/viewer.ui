@@ -124,7 +124,7 @@
      </layout>
     </item>
     <item>
-     <layout class="QHBoxLayout" name="bottom_row">
+     <layout class="QHBoxLayout" name="bottom">
       <item>
        <widget class="QCheckBox" name="autoscale">
         <property name="text">
@@ -157,6 +157,9 @@
          </size>
         </property>
        </spacer>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="bottom_row"/>
       </item>
      </layout>
     </item>
