@@ -1,5 +1,7 @@
 # This Makefile is invoked by makefile after setting the working directory to
-# the build directory.
+# the $(BUILD) directory.
+
+PROGRAM_PREFIX = fa-
 
 all:    # Default target comes first!
 
@@ -58,10 +60,10 @@ capture_SRCS += capture.c           # Command line interface
 capture_SRCS += matlab.c            # Matlab header support
 
 
-all: $(BUILD)
+all: $(patsubst %,$(PROGRAM_PREFIX)%,$(BUILD))
 
 define expand_build
-$(target): $(COMMON_SRCS:.c=.o) $($(target)_SRCS:.c=.o)
+$(PROGRAM_PREFIX)$(target): $(COMMON_SRCS:.c=.o) $($(target)_SRCS:.c=.o)
 	$$(LINK.o) $$^ $$(LOADLIBES) $$(LDLIBS) -o $$@
 endef
 $(foreach target,$(BUILD),$(eval $(expand_build)))
