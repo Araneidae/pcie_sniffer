@@ -123,7 +123,7 @@ static bool parse_date_or_time(
     char *end;  // Mustn't assign NULL to *string!
     return
         TEST_NULL_(
-            end = strptime(*string, format, tm), error_message)  &&
+            end = strptime(*string, format, tm), "%s", error_message)  &&
         DO_(*string = end)  &&
         parse_nanoseconds(string, nsecs);
 }
@@ -178,7 +178,7 @@ bool report_parse_error(
         char *error_message;
         pop_error_handling(&error_message);
         print_error(
-            "Error parsing %s: %s at offset %d in \"%s\"",
+            "Error parsing %s: %s at offset %zd in \"%s\"",
             message, error_message, *end - string, string);
         free(error_message);
         return false;

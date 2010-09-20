@@ -172,7 +172,7 @@ bool validate_header(struct disk_header *header, uint64_t file_size)
                 header->d_sample_count * sizeof(struct decimated_data)) ==
             header->major_block_size,
             "Invalid major block size: "
-            "%"PRIu32" * (%"PRIu32" * %d + %"PRIu32" * %d) != %"PRIu32,
+            "%"PRIu32" * (%"PRIu32" * %zd + %"PRIu32" * %zd) != %"PRIu32,
                 header->archive_mask_count,
                 header->major_sample_count, FA_ENTRY_SIZE,
                 header->d_sample_count, sizeof(struct decimated_data),
@@ -180,7 +180,7 @@ bool validate_header(struct disk_header *header, uint64_t file_size)
         TEST_OK_(
             header->major_block_count * sizeof(struct data_index) <=
             header->index_data_size,
-            "Invalid index block size: %"PRIu32" * %d > %"PRIu32,
+            "Invalid index block size: %"PRIu32" * %zd > %"PRIu32,
                 header->major_block_count, sizeof(struct data_index),
                 header->index_data_size)  &&
         TEST_OK_(
@@ -192,7 +192,7 @@ bool validate_header(struct disk_header *header, uint64_t file_size)
         TEST_OK_(
             header->dd_total_count * header->archive_mask_count *
                 sizeof(struct decimated_data) <= header->dd_data_size,
-            "DD area too small: %"PRIu32" * %"PRIu32" * %d > %"PRIu32,
+            "DD area too small: %"PRIu32" * %"PRIu32" * %zd > %"PRIu32,
                 header->dd_total_count, header->archive_mask_count,
                 sizeof(struct decimated_data), header->dd_data_size)  &&
 
@@ -232,7 +232,7 @@ bool validate_header(struct disk_header *header, uint64_t file_size)
         TEST_OK_(
             header->index_data_size >=
             header->major_block_count * sizeof(struct data_index),
-            "Index area too small: %"PRIu32" < %"PRIu32" * %d",
+            "Index area too small: %"PRIu32" < %"PRIu32" * %zd",
                 header->index_data_size,
                 header->major_block_count, sizeof(struct data_index))  &&
 
@@ -267,7 +267,7 @@ void print_header(FILE *out, struct disk_header *header)
         "FA sniffer archive: %.7s, v%d.\n"
         "Archiving: %s\n"
         "Decimation %"PRIu32", %"PRIu32" => %"PRIu32", recording %u BPMs\n"
-        "Input block size = %"PRIu32" bytes, %"PRIu32" frames\n"
+        "Input block size = %"PRIu32" bytes, %zu frames\n"
         "Major block size = %"PRIu32" bytes, %"PRIu32" samples\n"
         "Total size = %"PRIu32" major blocks = %"PRIu32" samples"
             " = %"PRIu64" bytes\n"
