@@ -249,8 +249,8 @@ static void decimate_decimation(
     {
         sumx += input->mean.x;
         sumy += input->mean.y;
-        sumvarx = input->std.x * input->std.x;
-        sumvary = input->std.y * input->std.y;
+        sumvarx = (double) input->std.x * input->std.x;
+        sumvary = (double) input->std.y * input->std.y;
         if (input->min.x < minx)     minx = input->min.x;
         if (maxx < input->max.x)     maxx = input->max.x;
         if (input->min.y < miny)     miny = input->min.y;
