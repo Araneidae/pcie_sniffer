@@ -225,7 +225,8 @@ int main(int argc, char **argv)
     bool ok =
         process_args(argc, argv)  &&
         initialise_signals()  &&
-        TEST_IO(feenableexcept(FE_DIVBYZERO | FE_INVALID) == 0)  &&
+        TEST_IO(feenableexcept(
+            FE_DIVBYZERO | FE_INVALID | FE_OVERFLOW) == 0)  &&
         IF_(archiving,
             initialise_disk_writer(output_filename, &input_block_size))  &&
         maybe_daemonise()  &&

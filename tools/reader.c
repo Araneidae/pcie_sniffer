@@ -140,12 +140,6 @@ static bool mask_to_archive(const filter_mask_t mask, struct iter_mask *iter)
 
 
 struct reader {
-    /* Converts timestamp into block index and offset into block, suitable for
-     * passing to read_block() function, also checks that the requested number
-     * of samples are available in the archive. */
-    bool (*timestamp_to_index)(
-        uint64_t start, unsigned int samples,
-        unsigned int *block, unsigned int *offset);
     /* Reads the requested block from archive into buffer. */
     bool (*read_block)(
         int archive, unsigned int block, unsigned int i,
@@ -158,6 +152,8 @@ struct reader {
     unsigned int (*output_size)(unsigned int data_mask);
 
     unsigned int block_total_count;     // Range of block index
+    unsigned int decimation;            // Data decimation
+    unsigned int samples_per_block;     // Number of samples per block
 };
 
 
@@ -211,26 +207,67 @@ static bool transfer_data(
 }
 
 
+static bool check_run(
+    const struct reader *reader,
+    unsigned int start, unsigned int samples, unsigned int offset)
+{
+    unsigned int blocks =
+        (samples + reader->samples_per_block - 1) / reader->samples_per_block;
+    int d_id0;
+    int64_t d_t;
+    unsigned int available = check_contiguous(start, blocks, &d_id0, &d_t);
+    return TEST_OK_(available == blocks,
+        "Only %u contiguous samples available. Gap: id0 = %d, dt = %"PRId64"us",
+        available * reader->samples_per_block - offset, d_id0, d_t);
+}
+
+
+static bool compute_start(
+    const struct reader *reader,
+    uint64_t start, unsigned int samples, bool only_contiguous,
+    unsigned int *block, unsigned int *offset, uint64_t *timestamp)
+{
+    uint32_t decimation = reader->decimation;
+    uint64_t available;
+    return
+        timestamp_to_index(start, &available, block, offset)  &&
+        DO_(*offset /= decimation; available /= decimation)  &&
+        DO_(index_to_timestamp(*block, *offset * decimation, timestamp))  &&
+        TEST_OK_(samples <= available,
+            "Only %"PRIu64" samples of %u requested available",
+            available, samples)  &&
+        IF_(only_contiguous,
+            check_run(reader, *block, samples, *offset));
+}
+
+
 static bool read_data(
     const struct reader *reader, int scon,
     unsigned int data_mask, filter_mask_t read_mask,
-    uint64_t start, unsigned int samples)
+    uint64_t start, unsigned int samples,
+    bool only_contiguous, bool write_timestamp)
 {
-    struct iter_mask iter = { 0 };
     unsigned int block, offset;
+    uint64_t timestamp;
+    struct iter_mask iter = { 0 };
     read_buffers_t read_buffers = NULL;
     int archive = -1;
     bool ok =
-        reader->timestamp_to_index(start, samples, &block, &offset)  &&
+        compute_start(
+            reader, start, samples, only_contiguous,
+            &block, &offset, &timestamp)  &&
         mask_to_archive(read_mask, &iter)  &&
         lock_buffers(&read_buffers, iter.count)  &&
         TEST_IO(archive = open(archive_filename, O_RDONLY));
     bool write_ok = report_socket_error(scon, ok);
 
     if (ok  &&  write_ok)
-        write_ok = transfer_data(
-            reader, read_buffers, archive, scon,
-            &iter, data_mask, block, offset, samples);
+        write_ok =
+            IF_(write_timestamp,
+                TEST_write(scon, &timestamp, sizeof(uint64_t)))  &&
+            transfer_data(
+                reader, read_buffers, archive, scon,
+                &iter, data_mask, block, offset, samples);
 
     if (read_buffers != NULL)
         unlock_buffers(read_buffers, iter.count);
@@ -243,51 +280,6 @@ static bool read_data(
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 /* Format specific definitions. */
-
-
-static bool check_samples(uint64_t available, unsigned int samples)
-{
-    return
-        TEST_OK_(samples <= available,
-            "Only %"PRIu64" samples of %u requested available",
-            available, samples);
-}
-
-static bool timestamp_to_fa_index(
-    uint64_t start, unsigned int samples,
-    unsigned int *block, unsigned int *offset)
-{
-    uint64_t available;
-    return
-        timestamp_to_index(start, &available, block, offset)  &&
-        check_samples(available, samples);
-}
-
-static bool timestamp_to_d_index(
-    uint64_t start, unsigned int samples,
-    unsigned int *block, unsigned int *offset)
-{
-    uint32_t decimation = get_header()->first_decimation;
-    uint64_t available;
-    return
-        timestamp_to_index(start, &available, block, offset)  &&
-        DO_(*offset /= decimation; available /= decimation)  &&
-        check_samples(available, samples);
-}
-
-static bool timestamp_to_dd_index(
-    uint64_t start, unsigned int samples,
-    unsigned int *block, unsigned int *offset)
-{
-    int first_decimation = get_header()->first_decimation;
-    int second_decimation = get_header()->second_decimation;
-    int decimation = first_decimation * second_decimation;
-    uint64_t available;
-    return
-        timestamp_to_index(start, &available, block, offset)  &&
-        DO_(*offset /= decimation; available /= decimation)  &&
-        check_samples(available, samples);
-}
 
 
 static bool read_fa_block(
@@ -386,21 +378,19 @@ static unsigned int d_output_size(unsigned int data_mask)
 
 
 static struct reader fa_reader = {
-    .timestamp_to_index = timestamp_to_fa_index,
     .read_block = read_fa_block,
     .write_line = fa_write_line,
     .output_size = fa_output_size,
+    .decimation = 1,
 };
 
 static struct reader d_reader = {
-    .timestamp_to_index = timestamp_to_d_index,
     .read_block = read_d_block,
     .write_line = d_write_line,
     .output_size = d_output_size,
 };
 
 static struct reader dd_reader = {
-    .timestamp_to_index = timestamp_to_dd_index,
     .read_block = read_dd_block,
     .write_line = d_write_line,
     .output_size = d_output_size,
@@ -420,13 +410,19 @@ static struct reader dd_reader = {
  *
  * The syntax is very simple (no spaces allowed):
  *
- *  read-request = "R" source "M" filter-mask start "N" samples
+ *  read-request = "R" source "M" filter-mask start "N" samples options
  *  start = "T" date-time | "S" seconds [ "." nanoseconds ]
  *  source = "F" | "D" ["D"] ["F" data-mask]
  *  samples = integer
  *  data-mask = integer
+ *  options = [ "C" ] [ "T" ]
  *
- * */
+ * The options can only appear in the order given and have the following
+ * meanings:
+ *
+ *  C   Ensure no gaps in selected dataset, fail if any
+ *  T   Send timestamp at head of dataset
+ */
 
 /* Result of parsing a read command. */
 struct read_parse {
@@ -435,6 +431,8 @@ struct read_parse {
     uint64_t start;                 // Data start (in microseconds into epoch)
     const struct reader *reader;    // Interpretation of data source
     unsigned int data_mask;         // Data mask for D and DD data
+    bool only_contiguous;           // Only contiguous data acceptable
+    bool timestamp;                 // Send timestamp at start of data
 };
 
 
@@ -478,6 +476,14 @@ static bool parse_start(const char **string, uint64_t *start)
 }
 
 
+static bool parse_options(const char **string, struct read_parse *parse)
+{
+    parse->only_contiguous = read_char(string, 'C');
+    parse->timestamp = read_char(string, 'T');
+    return true;
+}
+
+
 static bool parse_read_request(const char **string, struct read_parse *parse)
 {
     return
@@ -487,7 +493,8 @@ static bool parse_read_request(const char **string, struct read_parse *parse)
         parse_mask(string, parse->read_mask)  &&
         parse_start(string, &parse->start)  &&
         parse_char(string, 'N')  &&
-        parse_uint(string, &parse->samples);
+        parse_uint(string, &parse->samples)  &&
+        parse_options(string, parse);
 }
 
 
@@ -504,7 +511,8 @@ bool process_read(int scon, const char *buf)
     if (DO_PARSE("read request", parse_read_request, buf, &parse))
         return read_data(
             parse.reader, scon, parse.data_mask,
-            parse.read_mask, parse.start, parse.samples);
+            parse.read_mask, parse.start, parse.samples,
+            parse.only_contiguous, parse.timestamp);
     else
         return report_socket_error(scon, false);
 }
@@ -517,8 +525,14 @@ bool initialise_reader(const char *archive)
     /* Initialise dynamic part of reader structures. */
     const struct disk_header *header = get_header();
     fa_reader.block_total_count  = header->major_block_count;
+    fa_reader.samples_per_block  = header->major_sample_count;
+    d_reader.decimation          = header->first_decimation;
     d_reader.block_total_count   = header->major_block_count;
+    d_reader.samples_per_block   = header->d_sample_count;
+    dd_reader.decimation =
+        header->first_decimation * header->second_decimation;
     dd_reader.block_total_count  = header->major_block_count;
+    dd_reader.samples_per_block  = header->dd_sample_count;
 
     return initialise_buffer_pool(256);
 }

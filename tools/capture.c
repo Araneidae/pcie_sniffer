@@ -43,6 +43,7 @@ static unsigned int sample_count = 0;
 static enum data_format data_format = DATA_FA;
 static unsigned int data_mask = 1;
 static bool show_progress = true;
+static bool request_contiguous = true;
 
 /* Archiver parameters read from archiver during initialisation. */
 static double sample_frequency;
@@ -174,6 +175,9 @@ static void usage(void)
 "           The bits in the data mask correspond to decimated fields:\n"
 "            1 => mean, 2 => min, 4 => max, 8 => standard deviation\n"
 "   -q   Suppress display of progress of capture on stderr\n"
+"   -g   Allow (unidentified) gaps in the captured sequence.  Only has any\n"
+"        effect on historical data\n"
+"   -k   Keep extra dimensions in matlab values\n"
 "\n"
 "Either a start time or continuous capture must be specified, and so\n"
 "precisely one of the following must be given:\n"
@@ -271,7 +275,7 @@ static bool parse_opts(int *argc, char ***argv)
     bool ok = true;
     while (ok)
     {
-        switch (getopt(*argc, *argv, "+hRCo:S:qs:t:b:p:f:"))
+        switch (getopt(*argc, *argv, "+hRCo:S:qgks:t:b:p:f:"))
         {
             case 'h':   usage();                                    exit(0);
             case 'R':   matlab_format = false;                      break;
@@ -279,6 +283,8 @@ static bool parse_opts(int *argc, char ***argv)
             case 'o':   output_filename = optarg;                   break;
             case 'S':   server_name = optarg;                       break;
             case 'q':   show_progress = false;                      break;
+            case 'g':   request_contiguous = false;                 break;
+            case 'k':   squeeze_matlab = false;                     break;
             case 's':   ok = parse_start(parse_datetime, optarg);   break;
             case 't':   ok = parse_start(parse_today, optarg);      break;
             case 'b':   ok = parse_start(parse_before, optarg);     break;
@@ -380,8 +386,9 @@ static bool request_data(int sock)
             case DATA_D:    sprintf(format, "DF%u",  data_mask);    break;
             case DATA_DD:   sprintf(format, "DDF%u", data_mask);    break;
         }
-        sprintf(request, "R%sMR%sS%ld.%09ldN%u\n",
-            format, raw_mask, start.tv_sec, start.tv_nsec, sample_count);
+        sprintf(request, "R%sMR%sS%ld.%09ldN%u%s%s\n",
+            format, raw_mask, start.tv_sec, start.tv_nsec, sample_count,
+            request_contiguous ? "C" : "", matlab_format ? "T" : "");
     }
     return TEST_write(sock, request, strlen(request));
 }
@@ -487,11 +494,17 @@ static const char *format_name(void)
 }
 
 
-static bool write_header(unsigned int frames_written)
+static bool write_header(unsigned int frames_written, uint64_t timestamp)
 {
+    bool squeeze[4] = {
+        false,                                      // X, Y
+        data_format == DATA_FA || squeeze_matlab,   // Decimated subfield
+        squeeze_matlab,                             // BPM ID
+        false                                       // Sample number
+    };
     return write_matlab_header(
         output_file, capture_mask, data_mask, get_decimation(),
-        frames_written, format_name(), squeeze_matlab);
+        matlab_timestamp(timestamp), frames_written, format_name(), squeeze);
 }
 
 
@@ -500,8 +513,10 @@ static bool capture_and_save(int sock)
     if (matlab_format)
     {
         unsigned int frames_written;
+        uint64_t timestamp;
         return
-            write_header(sample_count)  &&
+            TEST_read(sock, &timestamp, sizeof(uint64_t))  &&
+            write_header(sample_count, timestamp)  &&
             DO_(frames_written = capture_data(sock))  &&
             IF_(frames_written != sample_count,
                 /* Seek back to the start of the file and rewrite the header
@@ -511,7 +526,7 @@ static bool capture_and_save(int sock)
                 TEST_OK(frames_written > 1)  &&
                 TEST_IO_(lseek(output_file, 0, SEEK_SET),
                     "Cannot update matlab file, file not seekable")  &&
-                write_header(frames_written));
+                write_header(frames_written, timestamp));
     }
     else
     {

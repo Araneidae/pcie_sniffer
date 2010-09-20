@@ -24,6 +24,9 @@
 // !!! should be disk header parameter
 #define TIMESTAMP_IIR   0.1
 
+/* Allow up to 1ms delta before reporting a data capture gap. */
+#define MAX_DELTA_T     1000
+
 
 /* Archiver header with core parameter. */
 static struct disk_header *header;
@@ -471,6 +474,44 @@ bool timestamp_to_index(
 
     UNLOCK(transform_lock);
     return ok;
+}
+
+
+void index_to_timestamp(
+    unsigned int block, unsigned int offset, uint64_t *timestamp)
+{
+    struct data_index *ix = &data_index[block];
+    *timestamp = ix->timestamp +
+        ((uint64_t) offset * ix->duration) / header->major_sample_count;
+}
+
+
+unsigned int check_contiguous(
+    unsigned int start, unsigned int blocks,
+    int *delta_id0, int64_t *delta_t)
+{
+    struct data_index *ix = &data_index[start];
+    uint64_t timestamp = ix->timestamp + ix->duration;
+    uint32_t id_zero = ix->id_zero + header->major_sample_count;
+    unsigned int contiguous = 1;
+    for (; contiguous < blocks; contiguous += 1)
+    {
+        start ++;
+        if (start == header->major_block_count)
+            start = 0;
+        ix = &data_index[start];
+
+        *delta_id0 = ix->id_zero - id_zero;
+        *delta_t = ix->timestamp - timestamp;
+printf("checking %d: %d, %lld\n", start, *delta_id0, *delta_t);
+        if (*delta_id0 != 0  ||
+            *delta_t < -MAX_DELTA_T  ||  MAX_DELTA_T < *delta_t)
+            break;
+
+        timestamp = ix->timestamp + ix->duration;
+        id_zero = ix->id_zero + header->major_sample_count;
+    }
+    return contiguous;
 }
 
 

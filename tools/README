@@ -1,8 +1,23 @@
 README
     This file provides a quick overview of the files in this directory, and is
-    bound to be out of date.
+    bound to be out of date.  The following applications are built:
 
-First the make files:
+    fa-archiver
+        Saves FA sniffer data to an archive and provides a socket interface for
+        retrieval of the archived data.
+
+    fa-prepare
+        Used to prepare the archive data area before running fa-archiver.
+
+    fa-capture
+        Connects to a running archive and captures live or historical data.
+
+    python/fa-viewer.py
+        Displays live FA data graphically
+
+
+Make files etc:
+---------------
 
 makefile
     This is the makefile invoked in response to running `make`.  This is used to
@@ -18,6 +33,7 @@ build
 
 
 Top level application files:
+----------------------------
 
 archiver.c archiver.h
     This is the main application, the FA sniffer archiver.
@@ -28,11 +44,9 @@ capture.c
 prepare.c
     Prepares a file or volume for use as an FA sniffer archive.
 
-read.c
-    Obsolescent...
-
 
 Supporting libraries:
+---------------------
 
 buffer.c buffer.h
     Circular in-memory buffer supporting one writer (sniffer) and multiple
@@ -51,6 +65,9 @@ error.c error.h
 list.h
     Some double link list macros and inline functions derived from the kernel.
 
+locking.c locking.h
+    Simple wrappers of pthread locking routines.
+
 mask.c mask.h
     Support routines for handling subsets of sniffer frames, and a sensible
     place for other supporting routines.
@@ -58,8 +75,25 @@ mask.c mask.h
 matlab.c matlab.h
     Implements writing Matlab header to data stream.
 
+parse.c parse.h
+    String parsing routines.
+
+reader.c reader.h
+    Implements read access to the FA archive.
+
 sniffer.c sniffer.h
     Capture of sniffer data from the FA sniffer device.
 
 socket_server.c socket_server.h
     Interface to FA sniffer clients.
+
+transform.c transform.h
+    Processing of data read from sniffer device, reshapes data on its way to the
+    archive file.
+
+
+To do
+-----
+
+* Implement separate archive for decimated data so that this can be read out at
+  a sensible pace.

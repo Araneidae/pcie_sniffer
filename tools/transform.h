@@ -31,6 +31,15 @@ void get_dd_data(
 bool timestamp_to_index(
     uint64_t timestamp, uint64_t *samples_available,
     unsigned int *major_block, unsigned int *offset);
+void index_to_timestamp(
+    unsigned int block, unsigned int offset, uint64_t *timestamp);
+/* Returns the number of blocks representing an uninterrupted sequence starting
+ * at major block start and running for at most blocks in length.  The id0 and
+ * timestamp gaps are also returned if the result is less than blocks. */
+unsigned int check_contiguous(
+    unsigned int start, unsigned int blocks,
+    int *delta_id0, int64_t *delta_t);
+
 
 /* Returns an unlocked pointer to the header: should only be used to access the
  * constant header fields. */

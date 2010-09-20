@@ -29,6 +29,10 @@
 #include "socket_server.h"
 
 
+/* String used to report protocol version in response to CV command. */
+#define PROTOCOL_VERSION    "0"
+
+
 static bool __attribute__((format(printf, 2, 3)))
     write_string(int sock, const char *format, ...)
 {
@@ -61,6 +65,7 @@ static double get_mean_frame_rate(void)
  *  d   Returns first decimation
  *  D   Returns second decimation
  *  T   Returns earliest available timestamp
+ *  V   Returns protocol identification string
  */
 static bool process_command(int scon, const char *buf)
 {
@@ -95,6 +100,9 @@ static bool process_command(int scon, const char *buf)
             case 'D':
                 ok = write_string(scon,
                      "%"PRIu32"\n", header->second_decimation);
+                break;
+            case 'V':
+                ok = write_string(scon, PROTOCOL_VERSION "\n");
                 break;
 
             default:
@@ -153,7 +161,7 @@ static bool process_subscribe(int scon, const char *buf)
         while (ok)
         {
             const void *block = get_read_block(reader, NULL, NULL);
-            ok = TEST_OK(block != NULL);
+            ok = TEST_OK_(block != NULL, "Gap in subscribed data");
             if (ok)
             {
                 ok = write_frames(
@@ -217,6 +225,8 @@ static void * process_connection(void *context)
 {
     int scon = (intptr_t) context;
 
+    /* Retrieve client address so we can log all messages associated with this
+     * client with the appropriate address. */
     struct sockaddr_in name;
     socklen_t namelen = sizeof(name);
     char client_name[64];
@@ -229,6 +239,9 @@ static void * process_connection(void *context)
     else
         sprintf(client_name, "unknown");
 
+    /* Read the command, required to be one line terminated by \n, and dispatch
+     * to the appropriate handler.  Any errors are handled locally and are
+     * reported below. */
     char buf[4096];
     push_error_handling();
     bool ok = read_line(scon, buf, sizeof(buf));
