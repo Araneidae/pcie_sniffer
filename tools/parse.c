@@ -12,9 +12,7 @@
 #include "parse.h"
 
 
-/* Checks whether a string has been fully parsed.  If no end pointer is
- * specified, then the string must be consumed or an error is generated, but if
- * an end pointer is given then the string is merely assigned to it. */
+/* Checks whether a string has been fully parsed. */
 bool parse_end(const char **string)
 {
     return TEST_OK_(**string == '\0', "Unexpected character");

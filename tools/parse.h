@@ -40,12 +40,12 @@ bool parse_char(const char **string, char ch);
 
 /* Wraps parsing of a complete string and generation of a suitable error
  * message. */
-#define DO_PARSE(message, parse, string, result) \
+#define DO_PARSE(message, parse, string, result...) \
     ( { \
       const char *__string__ = (string); \
       push_error_handling(); \
       report_parse_error((message), \
-          (parse)(&__string__, (result)), (string), &__string__); \
+          (parse)(&__string__, ##result), (string), &__string__); \
     } )
 
 /* This must be called with push_error_handling() in force, and will call

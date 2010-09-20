@@ -99,7 +99,7 @@ static bool read_response(int sock, char *buf, size_t buflen)
 }
 
 
-static bool parse_archive_parameters(const char **string, void *_)
+static bool parse_archive_parameters(const char **string)
 {
     return
         parse_double(string, &sample_frequency)  &&
@@ -121,8 +121,7 @@ static bool read_archive_parameters(void)
             read_response(sock, buffer, sizeof(buffer)),
             // Finally, whether read_response succeeds
             TEST_IO(close(sock)))  &&
-        DO_PARSE("server response",
-            parse_archive_parameters, buffer, NULL);
+        DO_PARSE("server response", parse_archive_parameters, buffer);
 }
 
 
@@ -275,7 +274,7 @@ static bool parse_opts(int *argc, char ***argv)
         switch (getopt(*argc, *argv, "+hRCo:S:qs:t:b:p:f:"))
         {
             case 'h':   usage();                                    exit(0);
-            case 'R':   matlab_format = true;                       break;
+            case 'R':   matlab_format = false;                      break;
             case 'C':   continuous_capture = true;                  break;
             case 'o':   output_filename = optarg;                   break;
             case 'S':   server_name = optarg;                       break;
@@ -515,12 +514,20 @@ static bool capture_and_save(int sock)
                 write_header(frames_written));
     }
     else
-        return DO_(capture_data(sock));
+    {
+        unsigned int frames_written = capture_data(sock);
+        return TEST_OK_(frames_written == sample_count,
+            "Only captured %u of %u frames", frames_written, sample_count);
+    }
 }
 
 
 int main(int argc, char **argv)
 {
+    char *server = getenv("FA_ARCHIVE_SERVER");
+    if (server != NULL)
+        server_name = server;
+
     int sock;
     bool ok =
         parse_args(argc, argv)  &&
