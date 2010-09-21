@@ -16,14 +16,6 @@ void process_block(const void *read_block, struct timespec *ts);
 
 /* Interlocked access. */
 
-/* Returns the current block index.  Note that data for the current block is
- * never valid! */
-int get_block_index(void);
-/* Returns selected index blocks. */
-void get_index_blocks(int ix, int samples, struct data_index *result);
-/* Reads dd data. */
-void get_dd_data(
-    int dd_index, int id, int samples, struct decimated_data *result);
 /* Converts timestamp into corresponding index, or fails if timestamp is outside
  * the archive.  Returns number of available samples, the major block containing
  * the first data point, and the offset of the selected timestamp into that

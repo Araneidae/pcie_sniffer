@@ -417,21 +417,32 @@ static bool check_response(int sock)
 }
 
 
-#define PROGRESS_INTERVAL   (1 << 12)
+#define PROGRESS_INTERVAL   (1 << 18)
 
-static void update_progress(unsigned int frames_written)
+static void update_progress(unsigned int frames_written, size_t frame_size)
 {
     const char *progress = "|/-\\";
-    if (frames_written % PROGRESS_INTERVAL == 0)
+    static uint64_t last_update = 0;
+    uint64_t bytes_written = (uint64_t) frame_size * frames_written;
+    if (bytes_written >= last_update + PROGRESS_INTERVAL)
     {
         fprintf(stderr, "%c %9d",
-            progress[(frames_written / PROGRESS_INTERVAL) % 4], frames_written);
+            progress[(bytes_written / PROGRESS_INTERVAL) % 4], frames_written);
         if (sample_count > 0)
             fprintf(stderr, " (%5.2f%%)", 
                 100.0 * (double) frames_written / sample_count);
         fprintf(stderr, "\r");
         fflush(stderr);
+        last_update = bytes_written;
     }
+}
+
+/* Erases residue of progress marker on command line. */
+static void reset_progress(void)
+{
+    char spaces[40];
+    memset(spaces, ' ', sizeof(spaces));
+    fprintf(stderr, "%.*s\r", sizeof(spaces), spaces);
 }
 
 
@@ -439,7 +450,7 @@ static void update_progress(unsigned int frames_written)
  * the sample count is reached or the read is interrupted. */
 static unsigned int capture_data(int sock)
 {
-    int frame_size =
+    size_t frame_size =
         count_data_bits(data_mask) *
         count_mask_bits(capture_mask) * FA_ENTRY_SIZE;
     unsigned int frames_written = 0;
@@ -475,9 +486,11 @@ static unsigned int capture_data(int sock)
             memmove(buffer, buffer + to_write, residue);
 
         if (show_progress)
-            update_progress(frames_written);
+            update_progress(frames_written, frame_size);
     }
 
+    if (show_progress)
+        reset_progress();
     return frames_written;
 }
 
@@ -502,9 +515,11 @@ static bool write_header(unsigned int frames_written, uint64_t timestamp)
         squeeze_matlab,                             // BPM ID
         false                                       // Sample number
     };
+    int decimation = get_decimation();
     return write_matlab_header(
-        output_file, capture_mask, data_mask, get_decimation(),
-        matlab_timestamp(timestamp), frames_written, format_name(), squeeze);
+        output_file, capture_mask, data_mask, decimation,
+        matlab_timestamp(timestamp), sample_frequency / decimation,
+        frames_written, format_name(), squeeze);
 }
 
 

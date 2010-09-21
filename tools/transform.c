@@ -387,35 +387,6 @@ static void initialise_index(void)
 /* Interlocked access. */
 
 
-int get_block_index(void)
-{
-    int ix;
-    LOCK(transform_lock);
-    ix = header->current_major_block;
-    UNLOCK(transform_lock);
-    return ix;
-}
-
-
-void get_index_blocks(int ix, int samples, struct data_index *result)
-{
-    LOCK(transform_lock);
-    memcpy(result, data_index + ix, sizeof(struct data_index) * samples);
-    UNLOCK(transform_lock);
-}
-
-
-void get_dd_data(
-    int dd_index, int id, int samples, struct decimated_data *result)
-{
-    LOCK(transform_lock);
-    struct decimated_data *start =
-        dd_area + header->dd_total_count * id + dd_index;
-    memcpy(result, start, sizeof(struct decimated_data) * samples);
-    UNLOCK(transform_lock);
-}
-
-
 bool timestamp_to_index(
     uint64_t timestamp, uint64_t *samples_available,
     unsigned int *major_block, unsigned int *offset)
@@ -503,7 +474,6 @@ unsigned int check_contiguous(
 
         *delta_id0 = ix->id_zero - id_zero;
         *delta_t = ix->timestamp - timestamp;
-printf("checking %d: %d, %lld\n", start, *delta_id0, *delta_t);
         if (*delta_id0 != 0  ||
             *delta_t < -MAX_DELTA_T  ||  MAX_DELTA_T < *delta_t)
             break;
