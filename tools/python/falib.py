@@ -5,7 +5,7 @@ DEFAULT_PORT = 8888
 
 import socket
 import numpy
-import select
+import cothread
 
 
 MASK_SIZE = 256         # Number of possible bits in a mask
@@ -38,22 +38,36 @@ class connection:
     def __init__(self, server=DEFAULT_SERVER, port=DEFAULT_PORT):
         self.sock = socket.create_connection((server, port))
         self.sock.setblocking(0)
-        self.buffer = ''
+        self.buf = []
 
     def close(self):
         self.sock.close()
 
-    def recv(self, block_size=4096):
-        select.select([self.sock.fileno()], [], [])
+    def recv(self, block_size=65536):
+        cothread.select([self.sock.fileno()], [], [])
         chunk = self.sock.recv(block_size)
         if not chunk:
             raise self.EOF('Connection closed by server')
         return chunk
 
     def read_block(self, length):
-        while len(self.buffer) < length:
-            self.buffer += self.recv()
-        result, self.buffer = self.buffer[:length], self.buffer[length:]
+        result = numpy.empty(length, dtype = numpy.int8)
+        rx = 0
+        buf = self.buf
+        while True:
+            l = len(buf)
+            if l:
+                if rx + l <= length:
+                    result.data[rx:rx+l] = buf
+                    buf = []
+                else:
+                    result.data[rx:] = buf[:length - rx]
+                    buf = buf[length - rx:]
+                rx += l
+                if rx >= length:
+                    break
+            buf = self.recv()
+        self.buf = buf
         return result
 
 

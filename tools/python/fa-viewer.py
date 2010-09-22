@@ -12,11 +12,6 @@ import cothread
 import numpy
 from PyQt4 import Qwt5, QtGui, QtCore, uic
 
-# Nasty hack.  Need to integrate this into cothread at some point, probably
-# better to make falib cothread aware
-import select
-select.select = cothread.select
-
 sys.path.append(os.path.dirname(__file__))
 import falib
 
