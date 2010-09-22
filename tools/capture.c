@@ -26,6 +26,7 @@
 
 #define DEFAULT_SERVER      "fa-archiver.pri.diamond.ac.uk"
 #define BUFFER_SIZE         (1 << 16)
+#define PROGRESS_INTERVAL   (1 << 18)
 
 
 enum data_format { DATA_FA, DATA_D, DATA_DD };
@@ -407,9 +408,8 @@ static bool check_response(int sock)
         else
         {
             /* Pass entire error response from server to stderr. */
-            int len;
-            if (TEST_IO(len = read(sock, response + 1, sizeof(response) - 1)))
-                fprintf(stderr, "%.*s", len + 1, response);
+            if (read_response(sock, response + 1, sizeof(response) - 1))
+                fprintf(stderr, "%s", response);
             return false;
         }
     }
@@ -418,7 +418,6 @@ static bool check_response(int sock)
 }
 
 
-#define PROGRESS_INTERVAL   (1 << 18)
 
 static void update_progress(unsigned int frames_written, size_t frame_size)
 {

@@ -160,16 +160,17 @@ static bool process_subscribe(int scon, const char *buf)
         struct reader_state *reader = open_reader(false);
         while (ok)
         {
-            const void *block = get_read_block(reader, NULL, NULL);
-            ok = TEST_OK_(block != NULL, "Gap in subscribed data");
-            if (ok)
-            {
-                ok = write_frames(
-                    scon, mask, block, fa_block_size / FA_FRAME_SIZE);
-                ok = TEST_OK_(
-                    release_read_block(reader),
-                    "Write underrun to client")  &&  ok;
-            }
+            const void *block;
+            ok =
+                TEST_NULL_(
+                    block = get_read_block(reader, NULL, NULL),
+                    "Gap in subscribed data")  &&
+                FINALLY(
+                    write_frames(
+                        scon, mask, block, fa_block_size / FA_FRAME_SIZE),
+                    // Finally, even if write_frames() fails.
+                    TEST_OK_(release_read_block(reader),
+                        "Write underrun to client"));
         }
         close_reader(reader);
         return ok;

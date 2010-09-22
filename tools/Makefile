@@ -3,6 +3,8 @@
 
 PROGRAM_PREFIX = fa-
 
+SHELL = bash
+
 all:    # Default target comes first!
 
 CFLAGS += -std=gnu99

@@ -35,23 +35,16 @@ void pop_error_handling(char **error_message)
 {
     struct error_stack *top = error_stack;
     error_stack = top->last;
-    if (error_message)
+    if (error_message != NULL)
         *error_message = top->message;
-    else
+    else if (top->message != NULL)
+    {
+        /* If the caller isn't claiming the error message this needs to be
+         * logged. */
+        log_error("Error message discarded: %s", top->message);
         free(top->message);
+    }
     free(top);
-}
-
-const char * get_error_message(void)
-{
-    return error_stack->message;
-}
-
-void reset_error_message(void)
-{
-    struct error_stack *top = error_stack;
-    free(top->message);
-    top->message = NULL;
 }
 
 
@@ -61,8 +54,15 @@ static bool save_message(char *message)
     struct error_stack *top = error_stack;
     if (top)
     {
-        free(top->message);
-        top->message = message;
+        if (top->message != NULL)
+        {
+            /* Repeated error messages can be a sign of a problem.  Keep the
+             * first message, but log any extras. */
+            log_error("Extra error message: %s", message);
+            free(message);
+        }
+        else
+            top->message = message;
         return true;
     }
     else
