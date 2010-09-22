@@ -389,7 +389,8 @@ static void initialise_index(void)
 
 bool timestamp_to_index(
     uint64_t timestamp, uint64_t *samples_available,
-    unsigned int *major_block, unsigned int *offset)
+    unsigned int *major_block, unsigned int *offset,
+    uint64_t *timestamp_found)
 {
     bool ok;
     LOCK(transform_lock);
@@ -416,7 +417,7 @@ bool timestamp_to_index(
     }
 
     uint64_t block_start = data_index[low].timestamp;
-    int duration = data_index[low].duration;
+    unsigned int duration = data_index[low].duration;
     ok = TEST_OK_(duration > 0, "Timestamp not in index");
     if (ok)
     {
@@ -434,10 +435,13 @@ bool timestamp_to_index(
 
         /* Store the results and validate the timestamp and sample count. */
         *major_block = low;
-        *offset = (int) raw_offset;
-        int block_count = current > low ? current - low : N - low + current;
+        *offset = (unsigned int) raw_offset;
+        unsigned int block_count =
+            current > low ? current - low : N - low + current;
         *samples_available =
             (uint64_t) block_count * header->major_sample_count - raw_offset;
+        *timestamp_found = block_start +
+            ((uint64_t) *offset * duration) / header->major_sample_count;
         ok =
             TEST_OK_(low != current, "Timestamp too late")  &&
             TEST_OK_(timestamp >= block_start, "Timestamp too early");
@@ -448,18 +452,9 @@ bool timestamp_to_index(
 }
 
 
-void index_to_timestamp(
-    unsigned int block, unsigned int offset, uint64_t *timestamp)
-{
-    struct data_index *ix = &data_index[block];
-    *timestamp = ix->timestamp +
-        ((uint64_t) offset * ix->duration) / header->major_sample_count;
-}
-
-
 unsigned int check_contiguous(
     unsigned int start, unsigned int blocks,
-    int *delta_id0, int64_t *delta_t)
+    unsigned int *delta_id0, int64_t *delta_t)
 {
     struct data_index *ix = &data_index[start];
     uint64_t timestamp = ix->timestamp + ix->duration;
