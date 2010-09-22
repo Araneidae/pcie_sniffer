@@ -24,14 +24,15 @@
 #include "parse.h"
 
 
-#define BUFFER_SIZE     (1 << 16)
+#define DEFAULT_SERVER      "fa-archiver.pri.diamond.ac.uk"
+#define BUFFER_SIZE         (1 << 16)
 
 
 enum data_format { DATA_FA, DATA_D, DATA_DD };
 
 /* Command line parameters. */
 static int port = 8888;
-static const char *server_name = "pc0062";
+static const char *server_name = DEFAULT_SERVER;
 static const char *output_filename = NULL;
 static filter_mask_t capture_mask;
 static bool matlab_format = true;
