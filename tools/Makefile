@@ -1,5 +1,5 @@
 # This Makefile is invoked by makefile after setting the working directory to
-# the $(BUILD) directory.
+# the $(BUILD_DIR) directory.
 
 PROGRAM_PREFIX = fa-
 
@@ -27,7 +27,6 @@ CFLAGS += -Wstrict-prototypes
 CFLAGS += -msse
 CFLAGS += -msse2
 CFLAGS += -mfpmath=sse
-CFLAGS += -march=pentium4
 CFLAGS += -ffast-math
 
 CPPFLAGS += -D_GNU_SOURCE

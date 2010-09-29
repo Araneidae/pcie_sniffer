@@ -452,7 +452,7 @@ static void reset_progress(void)
 {
     char spaces[40];
     memset(spaces, ' ', sizeof(spaces));
-    fprintf(stderr, "%.*s\r", sizeof(spaces), spaces);
+    fprintf(stderr, "%.*s\r", (int) sizeof(spaces), spaces);
 }
 
 
