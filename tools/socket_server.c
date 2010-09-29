@@ -154,7 +154,7 @@ static bool process_subscribe(int scon, const char *buf)
 {
     filter_mask_t mask;
     push_error_handling();
-    bool want_timestamp;
+    bool want_timestamp = false;
     bool parse_ok = DO_PARSE(
         "subscription", parse_subscription, buf, mask, &want_timestamp);
     bool ok = report_socket_error(scon, parse_ok);

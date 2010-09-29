@@ -8,8 +8,8 @@ SHELL = bash
 all:    # Default target comes first!
 
 CFLAGS += -std=gnu99
-# CFLAGS += -O2
-CFLAGS += -g
+CFLAGS += -O2
+# CFLAGS += -g
 
 CFLAGS += -Werror
 CFLAGS += -Wall -Wextra
