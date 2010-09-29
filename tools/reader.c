@@ -171,7 +171,7 @@ static bool check_run(
     unsigned int block_size = get_header()->major_sample_count;
     unsigned int blocks =
         round_up(offset + samples * reader->decimation, block_size);
-    unsigned int d_id0;
+    int d_id0;
     int64_t d_t;
     /* Check whether they represent a contiguous data block. */
     unsigned int available = check_contiguous(start, blocks, &d_id0, &d_t);

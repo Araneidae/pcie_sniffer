@@ -27,6 +27,11 @@
 /* Allow up to 1ms delta before reporting a data capture gap. */
 #define MAX_DELTA_T     1000
 
+/* We skip this many old index blocks that are still within range.  This is a
+ * simple heuristic to avoid early blocks being overwritten as we're reading
+ * them. */
+#define INDEX_SKIP      2
+
 
 /* Archiver header with core parameter. */
 static struct disk_header *header;
@@ -36,8 +41,8 @@ static struct data_index *data_index;
 static struct decimated_data *dd_area;
 
 /* Numbers of normal and decimated samples in a single input block. */
-static int input_frame_count;
-static int input_decimation_count;
+static unsigned int input_frame_count;
+static unsigned int input_decimation_count;
 
 /* This lock guards access to header->current_major_block, or to be precise,
  * enforces the invariant described here.  The transform thread has full
@@ -56,18 +61,18 @@ DECLARE_LOCKING(transform_lock);
 /* Double-buffered block IO. */
 
 static void *buffers[2];           // Two major buffers to receive data
-static int current_buffer;         // Index of buffer currently receiving data
+static unsigned int current_buffer; // Index of buffer currently receiving data
 static unsigned int fa_offset;     // Current sample count into current block
 static unsigned int d_offset;      // Current decimated sample count
 
 
-static inline struct fa_entry * fa_block(int id)
+static inline struct fa_entry * fa_block(unsigned int id)
 {
     return buffers[current_buffer] + fa_data_offset(header, fa_offset, id);
 }
 
 
-static inline struct decimated_data * d_block(int id)
+static inline struct decimated_data * d_block(unsigned int id)
 {
     return buffers[current_buffer] + d_data_offset(header, d_offset, id);
 }
@@ -106,7 +111,7 @@ static void write_major_block(void)
 /* Initialises IO buffers for the given minor block size. */
 static void initialise_io_buffer(void)
 {
-    for (int i = 0; i < 2; i ++)
+    for (unsigned int i = 0; i < 2; i ++)
         buffers[i] = valloc(header->major_block_size);
 
     current_buffer = 0;
@@ -127,7 +132,7 @@ static void initialise_io_buffer(void)
 static void transpose_column(
     const struct fa_entry *input, struct fa_entry *output)
 {
-    for (int i = input_frame_count; i > 0; i--)
+    for (unsigned int i = input_frame_count; i > 0; i--)
     {
         *output ++ = *input;
         input += FA_ENTRY_COUNT;
@@ -142,8 +147,8 @@ static void transpose_block(const void *read_block)
 {
     /* For the moment forget about being too clever about the impact of
      * transposing data on the cache.  We copy one column at a time. */
-    int written = 0;
-    for (int id = 0; id < FA_ENTRY_COUNT; id ++)
+    unsigned int written = 0;
+    for (unsigned int id = 0; id < FA_ENTRY_COUNT; id ++)
     {
         if (test_mask_bit(header->archive_mask, id))
         {
@@ -164,13 +169,13 @@ static void transpose_block(const void *read_block)
 /* Converts a column of N FA entries into a single entry by computing the mean,
  * min, max and standard deviation of the column. */
 static void decimate_column_one(
-    const struct fa_entry *input, struct decimated_data *output, int N)
+    const struct fa_entry *input, struct decimated_data *output, unsigned int N)
 {
     int64_t sumx = 0, sumy = 0;
     int32_t minx = INT32_MAX, maxx = INT32_MIN;
     int32_t miny = INT32_MAX, maxy = INT32_MIN;
     const struct fa_entry *in = input;
-    for (int i = 0; i < N; i ++)
+    for (unsigned int i = 0; i < N; i ++)
     {
         int32_t x = in->x;
         int32_t y = in->y;
@@ -193,7 +198,7 @@ static void decimate_column_one(
      * the data. */
     double sumvarx = 0, sumvary = 0;
     in = input;
-    for (int i = 0; i < N; i ++)
+    for (unsigned int i = 0; i < N; i ++)
     {
         int32_t x = in->x;
         int32_t y = in->y;
@@ -208,7 +213,7 @@ static void decimate_column_one(
 static void decimate_column(
     const struct fa_entry *input, struct decimated_data *output)
 {
-    for (int i = 0; i < input_decimation_count; i ++)
+    for (unsigned int i = 0; i < input_decimation_count; i ++)
     {
         decimate_column_one(input, output, header->first_decimation);
         input += header->first_decimation * FA_ENTRY_COUNT;
@@ -219,8 +224,8 @@ static void decimate_column(
 
 static void decimate_block(const void *read_block)
 {
-    int written = 0;
-    for (int id = 0; id < FA_ENTRY_COUNT; id ++)
+    unsigned int written = 0;
+    for (unsigned int id = 0; id < FA_ENTRY_COUNT; id ++)
     {
         if (test_mask_bit(header->archive_mask, id))
         {
@@ -242,13 +247,13 @@ unsigned int dd_offset;
 /* Similar to decimate_column above, but condenses already decimated data by
  * further decimation.  In this case the algorithms are somewhat different. */
 static void decimate_decimation(
-    const struct decimated_data *input, struct decimated_data *output, int N)
+    const struct decimated_data *input, struct decimated_data *output, unsigned int N)
 {
     int64_t sumx = 0, sumy = 0;
     double sumvarx = 0, sumvary = 0;
     int32_t minx = INT32_MAX, maxx = INT32_MIN;
     int32_t miny = INT32_MAX, maxy = INT32_MIN;
-    for (int i = 0; i < N; i ++, input ++)
+    for (unsigned int i = 0; i < N; i ++, input ++)
     {
         sumx += input->mean.x;
         sumy += input->mean.y;
@@ -280,8 +285,8 @@ static void double_decimate_block(void)
     const struct decimated_data *input = d_block(0) - header->second_decimation;
     struct decimated_data *output = dd_area + dd_offset;
 
-    int written = 0;
-    for (int id = 0; id < FA_ENTRY_COUNT; id ++)
+    unsigned int written = 0;
+    for (unsigned int id = 0; id < FA_ENTRY_COUNT; id ++)
     {
         if (test_mask_bit(header->archive_mask, id))
         {
@@ -301,13 +306,13 @@ static void double_decimate_block(void)
 /* Index maintenance. */
 
 /* Number of timestamps we expect to see in a single major block. */
-static int timestamp_count;
+static unsigned int timestamp_count;
 /* Array of timestamps for timestamp estimation, stored relative to the first
  * timestamp. */
 static uint64_t first_timestamp;
 static int *timestamp_array;
 /* Current index into the timestamp array as we fill it. */
-static int timestamp_index = 0;
+static unsigned int timestamp_index = 0;
 
 
 /* Adds a minor block to the timestamp array. */
@@ -335,17 +340,23 @@ static void advance_index(void)
 {
     /* Fit a straight line through the timestamps and compute the timestamp at
      * the beginning of the segment. */
-    int sum_t2 = 0;
     int64_t sum_x = 0;
     int64_t sum_xt = 0;
-    for (int i = 0; i < timestamp_count; i ++)
+    for (unsigned int i = 0; i < timestamp_count; i ++)
     {
         int t = 2*i - timestamp_count + 1;
         int64_t x = timestamp_array[i];
-        sum_t2 += t * t;
         sum_xt += x * t;
         sum_x  += x;
     }
+    /* Compute sum_t2 = SUM t**2 through the iteration above, but unwinding the
+     * algebra and using summation formulae
+     *      SUM_{i=1..N} i   = N(N+1)/2
+     *      SUM_{i=1..N} i*i = N(N+1)(2N+1)/6
+     * we get sum_t2 = N(N*N-1)/3 . */
+    uint64_t sum_t2 =
+        ((uint64_t) timestamp_count * timestamp_count - 1) *
+        timestamp_count / 3;
 
     struct data_index *ix = &data_index[header->current_major_block];
     /* Duration is "slope" calculated from fit above over an interval of
@@ -395,17 +406,17 @@ bool timestamp_to_index(
     bool ok;
     LOCK(transform_lock);
 
-    int N = header->major_block_count;
-    int current = header->current_major_block;
+    unsigned int N = header->major_block_count;
+    unsigned int current = header->current_major_block;
 
     /* Binary search to find major block corresponding to timestamp.  Note that
      * the high block is never inspected, which is just as well, as the current
      * block is invariably invalid. */
-    int low  = (current + 1) % N;
-    int high = current;
+    unsigned int low  = (current + 1 + INDEX_SKIP) % N;
+    unsigned int high = current;
     while ((low + 1) % N != high)
     {
-        int mid;
+        unsigned int mid;
         if (low < high)
             mid = (low + high) / 2;
         else
@@ -454,7 +465,7 @@ bool timestamp_to_index(
 
 unsigned int check_contiguous(
     unsigned int start, unsigned int blocks,
-    unsigned int *delta_id0, int64_t *delta_t)
+    int *delta_id0, int64_t *delta_t)
 {
     struct data_index *ix = &data_index[start];
     uint64_t timestamp = ix->timestamp + ix->duration;

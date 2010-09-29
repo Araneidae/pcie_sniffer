@@ -30,7 +30,7 @@ bool timestamp_to_index(
  * timestamp gaps are also returned if the result is less than blocks. */
 unsigned int check_contiguous(
     unsigned int start, unsigned int blocks,
-    unsigned int *delta_id0, int64_t *delta_t);
+    int *delta_id0, int64_t *delta_t);
 
 
 /* Returns an unlocked pointer to the header: should only be used to access the
