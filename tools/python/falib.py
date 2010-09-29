@@ -1,6 +1,6 @@
 '''Simple FA capture library for reading data from the FA sniffer.'''
 
-DEFAULT_SERVER = 'fa-archiver.pri.diamond.ac.uk'
+DEFAULT_SERVER = 'fa-archiver.cs.diamond.ac.uk'
 DEFAULT_PORT = 8888
 
 import socket

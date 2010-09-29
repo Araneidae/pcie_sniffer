@@ -16,6 +16,10 @@ sys.path.append(os.path.dirname(__file__))
 import falib
 
 
+X_colour = QtGui.QColor(64, 64, 255)    # QtCore.Qt.blue is too dark
+Y_colour = QtCore.Qt.red
+
+
 
 # ------------------------------------------------------------------------------
 #   Data Acquisition
@@ -233,10 +237,10 @@ class mode_raw(mode_common):
             parent, self.Decimations, lambda d: 50*d < self.timebase,
             self.set_decimation)
         self.decimation = self.selector.decimation
-        self.maxx = parent.makecurve(QtCore.Qt.blue, True)
-        self.maxy = parent.makecurve(QtCore.Qt.red, True)
-        self.minx = parent.makecurve(QtCore.Qt.blue, True)
-        self.miny = parent.makecurve(QtCore.Qt.red, True)
+        self.maxx = parent.makecurve(X_colour, True)
+        self.maxy = parent.makecurve(Y_colour, True)
+        self.minx = parent.makecurve(X_colour, True)
+        self.miny = parent.makecurve(Y_colour, True)
         self.show_x = True
         self.show_y = True
         self.set_enable(False)
@@ -506,8 +510,8 @@ class mode_integrated(mode_common):
         self.button = QtGui.QPushButton('Background', parent.ui)
         parent.ui.bottom_row.addWidget(self.button)
         parent.connect(self.button, 'clicked()', self.set_background)
-        self.cxb = parent.makecurve(QtCore.Qt.blue, True)
-        self.cyb = parent.makecurve(QtCore.Qt.red,  True)
+        self.cxb = parent.makecurve(X_colour, True)
+        self.cyb = parent.makecurve(Y_colour,  True)
         self.show_x = True
         self.show_y = True
         self.set_enable(False)
@@ -662,8 +666,8 @@ class Viewer:
         self.ui.axes.layout().addWidget(plot)
 
         self.plot = plot
-        self.cx = self.makecurve(QtCore.Qt.blue)
-        self.cy = self.makecurve(QtCore.Qt.red)
+        self.cx = self.makecurve(X_colour)
+        self.cy = self.makecurve(Y_colour)
 
         # set background to black
         plot.setCanvasBackground(QtCore.Qt.black)

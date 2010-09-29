@@ -24,7 +24,7 @@
 #include "parse.h"
 
 
-#define DEFAULT_SERVER      "fa-archiver.pri.diamond.ac.uk"
+#define DEFAULT_SERVER      "fa-archiver.cs.diamond.ac.uk"
 #define BUFFER_SIZE         (1 << 16)
 #define PROGRESS_INTERVAL   (1 << 18)
 
@@ -46,6 +46,7 @@ static enum data_format data_format = DATA_FA;
 static unsigned int data_mask = 1;
 static bool show_progress = true;
 static bool request_contiguous = true;
+static const char *data_name = "data";
 
 /* Archiver parameters read from archiver during initialisation. */
 static double sample_frequency;
@@ -145,10 +146,10 @@ static unsigned int get_decimation(void)
 /* Argument parsing. */
 
 
-static void usage(void)
+static void usage(char *argv0)
 {
     printf(
-"Usage: capture [options] <capture-mask> [<samples>]\n"
+"Usage: %s [options] <capture-mask> [<samples>]\n"
 "\n"
 "Captures sniffer frames from the FA archiver, either reading historical data\n"
 "(if -b, -t or -s is given) or live continuous data (if -C is specified).\n"
@@ -164,11 +165,17 @@ static void usage(void)
 "historical data (-s or -t).  If <samples> is not specified continuous\n"
 "capture (-C) can be interrupted with ctrl-C.\n"
 "\n"
+"Either a start time or continuous capture must be specified, and so\n"
+"precisely one of the following must be given:\n"
+"   -s:  Specify start, as a date and time in ISO 8601 format (with\n"
+"        fractional seconds allowed), interpreted as a time in UTC.\n"
+"   -t:  Specify start as a time of day today, or yesterday if Y added to\n"
+"        the end, in format hh:mm:ss[Y], interpreted as a local time.\n"
+"   -b:  Specify start as a time in the past as hh:mm:ss\n"
+"   -C   Request continuous capture from live data stream\n"
+"\n"
 "The following options can be given:\n"
 "\n"
-"   -S:  Specify archive server to read from (default is %s)\n"
-"   -p:  Specify port to connect to on server (default is %d)\n"
-"   -R   Save in raw format, otherwise the data is saved in matlab format\n"
 "   -o:  Save output to specified file, otherwise stream to stdout\n"
 "   -f:  Specify data format, can be -fF for FA (the default), -fd[mask] for\n"
 "        single decimated data, or -fD[mask] for double decimated data, where\n"
@@ -176,23 +183,20 @@ static void usage(void)
 "        for archived data.\n"
 "           The bits in the data mask correspond to decimated fields:\n"
 "            1 => mean, 2 => min, 4 => max, 8 => standard deviation\n"
-"   -q   Suppress display of progress of capture on stderr\n"
+"   -R   Save in raw format, otherwise the data is saved in matlab format\n"
 "   -g   Allow (unidentified) gaps in the captured sequence.  Only has any\n"
 "        effect on historical data\n"
 "   -k   Keep extra dimensions in matlab values\n"
-"\n"
-"Either a start time or continuous capture must be specified, and so\n"
-"precisely one of the following must be given:\n"
-"   -s:  Specify start, as a date and time in ISO 8601 format\n"
-"   -t:  Specify start as a time of day today, or yesterday if Y added to\n"
-"        end, in format hh:mm:ss[Y]\n"
-"   -b:  Specify start as a time in the past as hh:mm:ss\n"
-"   -C   Request continuous capture from live data stream\n"
+"   -n:  Specify name of data array (default is \"%s\")\n"
+"   -S:  Specify archive server to read from (default is\n"
+"            %s)\n"
+"   -p:  Specify port to connect to on server (default is %d)\n"
+"   -q   Suppress display of progress of capture on stderr\n"
 "\n"
 "Note that if matlab format is specified and continuous capture is\n"
 "interrupted then output must be directed to a file, otherwise the capture\n"
 "count in the result will be invalid.\n"
-    , server_name, port);
+    , argv0, data_name, server_name, port);
 }
 
 
@@ -274,12 +278,17 @@ static bool parse_start(
 
 static bool parse_opts(int *argc, char ***argv)
 {
+    char *argv0 = (*argv)[0];
+    char *argv0slash = strrchr(argv0, '/');
+    if (argv0slash != NULL)
+        argv0 = argv0slash + 1;
+
     bool ok = true;
     while (ok)
     {
-        switch (getopt(*argc, *argv, "+hRCo:S:qgks:t:b:p:f:"))
+        switch (getopt(*argc, *argv, "+hRCo:S:qgkn:s:t:b:p:f:"))
         {
-            case 'h':   usage();                                    exit(0);
+            case 'h':   usage(argv0);                               exit(0);
             case 'R':   matlab_format = false;                      break;
             case 'C':   continuous_capture = true;                  break;
             case 'o':   output_filename = optarg;                   break;
@@ -287,6 +296,7 @@ static bool parse_opts(int *argc, char ***argv)
             case 'q':   show_progress = false;                      break;
             case 'g':   request_contiguous = false;                 break;
             case 'k':   squeeze_matlab = false;                     break;
+            case 'n':   data_name = optarg;                         break;
             case 's':   ok = parse_start(parse_datetime, optarg);   break;
             case 't':   ok = parse_start(parse_today, optarg);      break;
             case 'b':   ok = parse_start(parse_before, optarg);     break;
@@ -495,18 +505,6 @@ static unsigned int capture_data(int sock)
 }
 
 
-static const char *format_name(void)
-{
-    switch (data_format)
-    {
-        case DATA_FA:   return "fa";
-        case DATA_D:    return "d";
-        case DATA_DD:   return "dd";
-        default:        return NULL;    // Not going to happen
-    }
-}
-
-
 static bool write_header(unsigned int frames_written, uint64_t timestamp)
 {
     bool squeeze[4] = {
@@ -519,7 +517,7 @@ static bool write_header(unsigned int frames_written, uint64_t timestamp)
     return write_matlab_header(
         output_file, capture_mask, data_mask, decimation,
         matlab_timestamp(timestamp), sample_frequency / decimation,
-        frames_written, format_name(), squeeze);
+        frames_written, data_name, squeeze);
 }
 
 
