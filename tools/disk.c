@@ -272,7 +272,8 @@ void print_header(FILE *out, struct disk_header *header)
         "Total size = %"PRIu32" major blocks = %"PRIu32" samples"
             " = %"PRIu64" bytes\n"
         "Index data from %"PRIu64" for %"PRIu32" bytes\n"
-        "DD data starts %"PRIu64" for %"PRIu32" bytes, %"PRIu32" samples\n"
+        "DD data starts %"PRIu64" for %"PRIu32" bytes, %"PRIu32" samples,"
+            " %"PRIu32" per block\n"
         "FA+D data from %"PRIu64", %"PRIu32" decimated samples per block\n"
         "Last duration: %"PRIu32" us, or %lg Hz.  Current index: %"PRIu32"\n",
         header->signature, header->version,
@@ -287,6 +288,7 @@ void print_header(FILE *out, struct disk_header *header)
             header->total_data_size,
         header->index_data_start, header->index_data_size,
         header->dd_data_start, header->dd_data_size, header->dd_total_count,
+            header->dd_sample_count,
         header->major_data_start, header->d_sample_count,
         header->last_duration,
             1e6 * header->major_sample_count / (double) header->last_duration,

@@ -24,13 +24,10 @@ void process_block(const void *read_block, struct timespec *ts);
 bool timestamp_to_index(
     uint64_t timestamp, uint64_t *samples_available,
     unsigned int *major_block, unsigned int *offset);
-/* Returns the number of blocks representing an uninterrupted sequence starting
- * at major block start and running for at most blocks in length.  The id0 and
- * timestamp gaps are also returned if the result is less than blocks. */
-unsigned int check_contiguous(
-    unsigned int start, unsigned int blocks,
-    int *delta_id0, int64_t *delta_t);
 
+/* Searches a range of index blocks for a gap in the timestamp, returning true
+ * iff a gap is found.  *start is updated to the index of the block directly
+ * after the first gap and *blocks is decremented accordingly. */
 bool find_gap(unsigned int *start, unsigned int *blocks);
 const struct data_index * read_index(unsigned int ix);
 

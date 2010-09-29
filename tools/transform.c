@@ -441,33 +441,24 @@ bool timestamp_to_index(
 
 bool find_gap(unsigned int *start, unsigned int *blocks)
 {
-    unsigned int current = header->current_major_block;
-
     struct data_index *ix = &data_index[*start];
     uint64_t timestamp = ix->timestamp + ix->duration;
     uint32_t id_zero   = ix->id_zero + header->major_sample_count;
-    while (*blocks > 0)
+    while (*blocks > 1)
     {
         *blocks -= 1;
         *start += 1;
         if (*start == header->major_block_count)
             *start = 0;
 
-        if (*start == current)
-            /* Run off the array of available data. */
-            return false;
-        else
-        {
-            ix = &data_index[*start];
-            int64_t delta_t = ix->timestamp - timestamp;
-            int delta_id0 = ix->id_zero - id_zero;
-            if (delta_id0 != 0  ||
-                delta_t < -MAX_DELTA_T  ||  MAX_DELTA_T < delta_t)
-                return true;
+        ix = &data_index[*start];
+        int64_t delta_t = ix->timestamp - timestamp;
+        if (ix->id_zero != id_zero  ||
+            delta_t < -MAX_DELTA_T  ||  MAX_DELTA_T < delta_t)
+            return true;
 
-            timestamp = ix->timestamp + ix->duration;
-            id_zero = ix->id_zero + header->major_sample_count;
-        }
+        timestamp = ix->timestamp + ix->duration;
+        id_zero = ix->id_zero + header->major_sample_count;
     }
     return false;
 }
@@ -477,35 +468,6 @@ const struct data_index * read_index(unsigned int ix)
 {
     return &data_index[ix];
 }
-
-
-unsigned int check_contiguous(
-    unsigned int start, unsigned int blocks,
-    int *delta_id0, int64_t *delta_t)
-{
-    struct data_index *ix = &data_index[start];
-    uint64_t timestamp = ix->timestamp + ix->duration;
-    uint32_t id_zero = ix->id_zero + header->major_sample_count;
-    unsigned int contiguous = 1;
-    for (; contiguous < blocks; contiguous += 1)
-    {
-        start ++;
-        if (start == header->major_block_count)
-            start = 0;
-        ix = &data_index[start];
-
-        *delta_id0 = ix->id_zero - id_zero;
-        *delta_t = ix->timestamp - timestamp;
-        if (*delta_id0 != 0  ||
-            *delta_t < -MAX_DELTA_T  ||  MAX_DELTA_T < *delta_t)
-            break;
-
-        timestamp = ix->timestamp + ix->duration;
-        id_zero = ix->id_zero + header->major_sample_count;
-    }
-    return contiguous;
-}
-
 
 const struct disk_header *get_header(void)
 {

@@ -84,7 +84,7 @@ static void unlock_buffers(read_buffers_t buffers, unsigned int count)
     free(buffers);
 }
 
-static bool initialise_buffer_pool(size_t buffer_size, unsigned int count)
+static void initialise_buffer_pool(size_t buffer_size, unsigned int count)
 {
     for (unsigned int i = 0; i < count; i ++)
     {
@@ -94,8 +94,6 @@ static bool initialise_buffer_pool(size_t buffer_size, unsigned int count)
         buffer_pool = entry;
     }
     pool_size = count;
-
-    return true;
 }
 
 
@@ -165,32 +163,48 @@ static unsigned int round_up(unsigned int a, unsigned int b)
  * read block number and offset, and adjusts the available sample count
  * accordingly. */
 static void fixup_offset(
-    const struct reader *reader,
+    const struct reader *reader, unsigned int ix_block,
     unsigned int *block, unsigned int *offset, uint64_t *available)
 {
     *available /= reader->decimation;
     *offset =
         *offset / reader->decimation +
-        (*block % reader->fa_blocks_per_block) * reader->samples_per_fa_block;
-    *block /= reader->fa_blocks_per_block;
+        (ix_block % reader->fa_blocks_per_block) * reader->samples_per_fa_block;
+    *block = ix_block / reader->fa_blocks_per_block;
 }
 
 
+/* Converts data block and offset into an index block and data offset.  Note
+ * that the computed data offset is still in reader sized samples, to convert to
+ * FA samples a further multiplication by reader->decimation is needed. */
+static void convert_data_to_index(
+    const struct reader *reader,
+    unsigned int data_block, unsigned int data_offset,
+    unsigned int *ix_block, unsigned int *ix_offset)
+{
+    *ix_block =
+        data_block * reader->fa_blocks_per_block +
+        data_offset / reader->samples_per_fa_block;
+    *ix_offset = data_offset % reader->samples_per_fa_block;
+}
+
+
+/* Checks that the run of samples from (ix_start,offset) has no gaps.  Here the
+ * start is an index block, but the offset is an offset in data points. */
 static bool check_run(
     const struct reader *reader,
-    unsigned int start, unsigned int samples, unsigned int offset)
+    unsigned int ix_start, unsigned int offset, unsigned int samples)
 {
-    /* Compute the total number of index blocks that will need to be read. */
-    unsigned int block_size = get_header()->major_sample_count;
-    unsigned int blocks =
-        round_up(offset + samples * reader->decimation, block_size);
-    int d_id0;
-    int64_t d_t;
+    /* Convert offset into a data offset into the current index block and
+     * compute the total number of index blocks that will need to be read. */
+    offset = offset % reader->samples_per_fa_block;
+    unsigned int blocks = round_up(
+        offset + samples, reader->samples_per_fa_block);
+    unsigned int blocks_requested = blocks;
     /* Check whether they represent a contiguous data block. */
-    unsigned int available = check_contiguous(start, blocks, &d_id0, &d_t);
-    return TEST_OK_(available == blocks,
-        "Only %u contiguous samples available. Gap: id0 = %d, dt = %"PRId64"us",
-        (available * block_size - offset) / reader->decimation, d_id0, d_t);
+    return TEST_OK_(!find_gap(&ix_start, &blocks),
+        "Only %u contiguous samples available",
+        (blocks_requested - blocks) * reader->samples_per_fa_block - offset);
 }
 
 
@@ -200,21 +214,20 @@ static bool compute_start(
     unsigned int *block, unsigned int *offset)
 {
     uint64_t available;
-    unsigned int fa_block;
+    unsigned int ix_block;
     return
         /* Convert requested timestamp into a starting index block and FA offset
          * into that block. */
-        timestamp_to_index(start, &available, &fa_block, offset)  &&
-        DO_(*block = fa_block)  &&
+        timestamp_to_index(start, &available, &ix_block, offset)  &&
         /* Convert FA block, offset and available counts into numbers
          * appropriate for our current data type. */
-        DO_(fixup_offset(reader, block, offset, &available))  &&
-        /* Check the requested data block is valid and available. */
+        DO_(fixup_offset(reader, ix_block, block, offset, &available))  &&
+        /* Check the requested data set is valid and available. */
         TEST_OK_(samples <= available,
             "Only %"PRIu64" samples of %u requested available",
             available, samples)  &&
         IF_(only_contiguous,
-            check_run(reader, fa_block, samples, *offset));
+            check_run(reader, ix_block, *offset, samples));
 }
 
 
@@ -222,14 +235,12 @@ static bool send_timestamp(
     const struct reader *reader, int scon,
     unsigned int block, unsigned int offset)
 {
-    /* Convert back to start and offset in index blocks. */
-    unsigned int samples_per_block = reader->samples_per_fa_block;
-    const struct data_index *data_index = read_index(
-        block * reader->fa_blocks_per_block + offset / samples_per_block);
-    unsigned int data_offset = offset % samples_per_block;
+    unsigned int ix_block, ix_offset;
+    convert_data_to_index(reader, block, offset, &ix_block, &ix_offset);
+    const struct data_index *data_index = read_index(ix_block);
     uint64_t timestamp =
         data_index->timestamp +
-        (uint64_t) data_offset * data_index->duration /
+        (uint64_t) ix_offset * data_index->duration /
             reader->samples_per_fa_block;
     return TEST_write(scon, &timestamp, sizeof(uint64_t));
 }
@@ -240,15 +251,13 @@ static bool send_gaplist(
     const struct reader *reader, int scon,
     unsigned int block, unsigned int offset, unsigned int samples)
 {
-    const struct disk_header *header = get_header();
-
     /* First convert block, offset and samples into an index block count. */
     unsigned int samples_per_block = reader->samples_per_fa_block;
-    unsigned int ix_start =
-        block * reader->fa_blocks_per_block + offset / samples_per_block;
-    unsigned int data_offset = offset % samples_per_block;
+    unsigned int ix_start, data_offset;
+    convert_data_to_index(reader, block, offset, &ix_start, &data_offset);
+
     unsigned int ix_count = round_up(samples + data_offset, samples_per_block);
-    unsigned int N = header->major_block_count;
+    unsigned int N = get_header()->major_block_count;
 
     /* Now count the gaps. */
     uint32_t gap_count = 0;
@@ -685,5 +694,6 @@ bool initialise_reader(const char *archive)
         round_up(header->major_block_count, dd_reader.fa_blocks_per_block);
     dd_reader.samples_per_fa_block = header->dd_sample_count;
 
-    return initialise_buffer_pool(buffer_size, 256);
+    initialise_buffer_pool(buffer_size, 256);
+    return true;
 }
