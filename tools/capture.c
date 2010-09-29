@@ -182,7 +182,7 @@ static void usage(char *argv0)
 "        [mask] is an optional data mask.  Decimated data is only available\n"
 "        for archived data.\n"
 "           The bits in the data mask correspond to decimated fields:\n"
-"            1 => mean, 2 => min, 4 => max, 8 => standard deviation\n"
+"            1 => mean, 2 => min, 4 => max\n"
 "   -R   Save in raw format, otherwise the data is saved in matlab format\n"
 "   -g   Allow (unidentified) gaps in the captured sequence.  Only has any\n"
 "        effect on historical data\n"
@@ -250,7 +250,7 @@ static bool parse_data_format(const char **string, enum data_format *format)
         else
             return
                 parse_uint(string, &data_mask)  &&
-                TEST_OK_(0 < data_mask  &&  data_mask <= 0xF,
+                TEST_OK_(0 < data_mask  &&  data_mask <= 7,
                     "Invalid data mask");
     }
 }

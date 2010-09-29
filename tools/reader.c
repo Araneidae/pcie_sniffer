@@ -415,7 +415,6 @@ static void d_write_line(
         if (data_mask & 1)  *output++ = input[0];
         if (data_mask & 2)  *output++ = input[1];
         if (data_mask & 4)  *output++ = input[2];
-        if (data_mask & 8)  *output++ = input[3];
     }
 }
 
@@ -431,7 +430,7 @@ static size_t d_output_size(unsigned int data_mask)
 {
     unsigned int count =
         ((data_mask >> 0) & 1) + ((data_mask >> 1) & 1) +
-        ((data_mask >> 2) & 1) + ((data_mask >> 3) & 1);
+        ((data_mask >> 2) & 1);
     return count * FA_ENTRY_SIZE;
 }
 
@@ -510,7 +509,7 @@ static bool parse_source(const char **string, struct read_parse *parse)
     }
     else if (read_char(string, 'D'))
     {
-        parse->data_mask = 0xF;     // Default to all fields if no mask
+        parse->data_mask = 7;       // Default to all fields if no mask
         if (read_char(string, 'D'))
             parse->reader = &dd_reader;
         else
@@ -518,7 +517,7 @@ static bool parse_source(const char **string, struct read_parse *parse)
         if (read_char(string, 'F'))
             return
                 parse_uint(string, &parse->data_mask)  &&
-                TEST_OK_(0 < parse->data_mask  &&  parse->data_mask <= 15,
+                TEST_OK_(0 < parse->data_mask  &&  parse->data_mask <= 7,
                     "Invalid decimated data fields: %x", parse->data_mask);
         else
             return true;

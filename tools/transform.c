@@ -189,25 +189,8 @@ static void decimate_column_one(
     }
     output->min.x = minx;    output->max.x = maxx;
     output->min.y = miny;    output->max.y = maxy;
-    double meanx = (double) sumx / N;
-    double meany = (double) sumy / N;
-    output->mean.x = (int32_t) round(meanx);
-    output->mean.y = (int32_t) round(meany);
-
-    /* For numerically stable computation of variance we take a second pass over
-     * the data. */
-    double sumvarx = 0, sumvary = 0;
-    in = input;
-    for (unsigned int i = 0; i < N; i ++)
-    {
-        int32_t x = in->x;
-        int32_t y = in->y;
-        sumvarx += (x - meanx) * (x - meanx);
-        sumvary += (y - meany) * (y - meany);
-        in += FA_ENTRY_COUNT;
-    }
-    output->std.x = (int32_t) round(sqrt(sumvarx / N));
-    output->std.y = (int32_t) round(sqrt(sumvary / N));
+    output->mean.x = (int32_t) (sumx / N);
+    output->mean.y = (int32_t) (sumy / N);
 }
 
 static void decimate_column(
@@ -247,18 +230,16 @@ unsigned int dd_offset;
 /* Similar to decimate_column above, but condenses already decimated data by
  * further decimation.  In this case the algorithms are somewhat different. */
 static void decimate_decimation(
-    const struct decimated_data *input, struct decimated_data *output, unsigned int N)
+    const struct decimated_data *input, struct decimated_data *output,
+    unsigned int N)
 {
     int64_t sumx = 0, sumy = 0;
-    double sumvarx = 0, sumvary = 0;
     int32_t minx = INT32_MAX, maxx = INT32_MIN;
     int32_t miny = INT32_MAX, maxy = INT32_MIN;
     for (unsigned int i = 0; i < N; i ++, input ++)
     {
         sumx += input->mean.x;
         sumy += input->mean.y;
-        sumvarx = (double) input->std.x * input->std.x;
-        sumvary = (double) input->std.y * input->std.y;
         if (input->min.x < minx)     minx = input->min.x;
         if (maxx < input->max.x)     maxx = input->max.x;
         if (input->min.y < miny)     miny = input->min.y;
@@ -270,8 +251,6 @@ static void decimate_decimation(
     output->max.x = maxx;
     output->min.y = miny;
     output->max.y = maxy;
-    output->std.x = (int32_t) round(sqrt(sumvarx / N));
-    output->std.y = (int32_t) round(sqrt(sumvary / N));
 }
 
 
