@@ -514,10 +514,16 @@ class mode_integrated(mode_common):
         self.cyb = parent.makecurve(Y_colour,  True)
         self.show_x = True
         self.show_y = True
+
+        self.yselect = QtGui.QCheckBox('Linear', parent.ui)
+        parent.ui.bottom_row.insertWidget(0, self.yselect)
+        parent.connect(self.yselect, 'stateChanged(int)', self.set_yscale)
+
         self.set_enable(False)
 
     def set_enable(self, enabled):
         self.button.setVisible(enabled)
+        self.yselect.setVisible(enabled)
         self.cxb.setVisible(enabled and self.show_x)
         self.cyb.setVisible(enabled and self.show_y)
 
@@ -526,6 +532,13 @@ class mode_integrated(mode_common):
         self.cxb.setData(self.xaxis, v[:, 0])
         self.cyb.setData(self.xaxis, v[:, 1])
         self.parent.plot.replot()
+
+    def set_yscale(self, linear):
+        if linear:
+            self.yscale = Qwt5.QwtLinearScaleEngine
+        else:
+            self.yscale = Qwt5.QwtLog10ScaleEngine
+        self.parent.reset_mode()
 
     def show_xy(self, show_x, show_y):
         self.show_x = show_x
