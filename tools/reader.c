@@ -135,24 +135,22 @@ static bool mask_to_archive(const filter_mask_t mask, struct iter_mask *iter)
 
 
 struct reader {
-    /* Adjusts computed initial offset according to decimation. */
-    bool (*fixup_offset)(
-        unsigned int *block, unsigned int *offset, uint64_t *available);
     /* Reads the requested block from archive into buffer. */
     bool (*read_block)(
         int archive, unsigned int block, unsigned int i,
         void *buffer, unsigned int *samples);
     /* Writes a single line from a list of buffers to an output buffer. */
-    void (*write_line)(
-        unsigned int count, read_buffers_t read_buffers, unsigned int offset,
-        unsigned int data_mask, struct fa_entry *output);
+    void (*write_lines)(
+        unsigned int line_count, unsigned int field_count,
+        read_buffers_t read_buffers, unsigned int offset,
+        unsigned int data_mask, void *output);
     /* The size of a single output value. */
     size_t (*output_size)(unsigned int data_mask);
 
     unsigned int block_total_count;     // Range of block index
-    unsigned int decimation;            // Data decimation
-    unsigned int fa_blocks_per_block;   // Number of index blocks per block
-    unsigned int max_samples_per_block; // Maximum number of samples per block
+    unsigned int decimation;            // FA samples per read sample
+    unsigned int fa_blocks_per_block;   // Index blocks per read block
+    unsigned int samples_per_fa_block;  // Samples in a single FA block
 };
 
 
@@ -160,6 +158,21 @@ struct reader {
 static unsigned int round_up(unsigned int a, unsigned int b)
 {
     return (a + b - 1) / b;
+}
+
+
+/* Using the reader parameters converts an index block number and offset into a
+ * read block number and offset, and adjusts the available sample count
+ * accordingly. */
+static void fixup_offset(
+    const struct reader *reader,
+    unsigned int *block, unsigned int *offset, uint64_t *available)
+{
+    *available /= reader->decimation;
+    *offset =
+        *offset / reader->decimation +
+        (*block % reader->fa_blocks_per_block) * reader->samples_per_fa_block;
+    *block /= reader->fa_blocks_per_block;
 }
 
 
@@ -196,7 +209,7 @@ static bool compute_start(
         DO_(*block = fa_block)  &&
         /* Convert FA block, offset and available counts into numbers
          * appropriate for our current data type. */
-        reader->fixup_offset(block, offset, &available)  &&
+        DO_(fixup_offset(reader, block, offset, &available))  &&
         /* Check the requested data block is valid and available. */
         TEST_OK_(samples <= available,
             "Only %"PRIu64" samples of %u requested available",
@@ -211,11 +224,6 @@ static bool transfer_data(
     int archive, int scon, struct iter_mask *iter, unsigned int data_mask,
     unsigned int block, unsigned int offset, unsigned int count)
 {
-    /* The write buffer determines how much we write to the socket layer at a
-     * time, so a comfortably large buffer is convenient.  Of course, it must be
-     * large enough to accomodate a single output line, but that is
-     * straightforward. */
-    char write_buffer[64 * K];
     size_t line_size_out = iter->count * reader->output_size(data_mask);
 
     bool ok = true;
@@ -232,22 +240,26 @@ static bool transfer_data(
          * sized chunks. */
         while (ok  &&  offset < samples_read  &&  count > 0)
         {
-            char *p = write_buffer;
-            size_t buf_size = 0;
-            while (count > 0  &&
-                offset < samples_read  &&
-                buf_size + line_size_out <= sizeof(write_buffer))
-            {
-                reader->write_line(
-                    iter->count, read_buffers, offset, data_mask,
-                    (struct fa_entry *) p);
-                p += line_size_out;
+            /* The write buffer determines how much we write to the socket layer
+             * at a time, so a comfortably large buffer is convenient.  Of
+             * course, it must be large enough to accomodate a single output
+             * line, but that is straightforward. */
+            char write_buffer[64 * K];
+            /* Enough lines to fill the write buffer, so long as we don't write
+             * more than requested and we don't exhaust the read blocks. */
+            unsigned int line_count = sizeof(write_buffer) / line_size_out;
+            if (count < line_count)
+                line_count = count;
+            if (offset + line_count > samples_read)
+                line_count = samples_read - offset;
 
-                count -= 1;
-                offset += 1;
-                buf_size += line_size_out;
-            }
-            ok = TEST_write(scon, write_buffer, buf_size);
+            reader->write_lines(
+                line_count, iter->count,
+                read_buffers, offset, data_mask, write_buffer);
+            ok = TEST_write(scon, write_buffer, line_count * line_size_out);
+
+            count -= line_count;
+            offset += line_count;
         }
 
         block = (block + 1) % reader->block_total_count;
@@ -303,37 +315,6 @@ static struct reader d_reader;
 static struct reader dd_reader;
 
 
-static bool fixup_fa_offset(
-    unsigned int *block, unsigned int *offset, uint64_t *available)
-{
-    return true;
-}
-
-static bool fixup_d_offset(
-    unsigned int *block, unsigned int *offset, uint64_t *available)
-{
-    *offset    /= d_reader.decimation;
-    *available /= d_reader.decimation;
-    return true;
-}
-
-static bool fixup_dd_offset(
-    unsigned int *block, unsigned int *offset, uint64_t *available)
-{
-    *offset    /= dd_reader.decimation;
-    *available /= dd_reader.decimation;
-
-    /* DD blocks are read as enough FA blocks to fill a read buffer -- this is
-     * block_divider, and each block thus contains (up to)
-     * max_samples_per_block, which is what we read. */
-    unsigned int block_divider = dd_reader.fa_blocks_per_block;
-    unsigned int fa_block_size = get_header()->dd_sample_count;
-    *offset += fa_block_size * (*block % block_divider);
-    *block  /= block_divider;
-    return true;
-}
-
-
 static bool read_fa_block(
     int archive, unsigned int major_block, unsigned int id,
     void *block, unsigned int *samples)
@@ -378,43 +359,57 @@ static bool read_dd_block(
     const struct disk_header *header = get_header();
     const struct decimated_data *dd_area = get_dd_area();
 
+    unsigned int max_samples_per_block =
+        dd_reader.fa_blocks_per_block * dd_reader.samples_per_fa_block;
     size_t offset =
         header->dd_total_count * id +
-        dd_reader.max_samples_per_block * major_block;
+        max_samples_per_block * major_block;
     if (major_block + 1 == dd_reader.block_total_count)
         /* The last block is quite likely to be short. */
         *samples = header->dd_total_count -
-            major_block * dd_reader.max_samples_per_block;
+            major_block * max_samples_per_block;
     else
-        *samples = dd_reader.max_samples_per_block;
+        *samples = max_samples_per_block;
     memcpy(block, dd_area + offset, sizeof(struct decimated_data) * *samples);
     return true;
 }
 
 
-static void fa_write_line(
-    unsigned int count, read_buffers_t read_buffers, unsigned int offset,
-    unsigned int data_mask, struct fa_entry *output)
+static void fa_write_lines(
+    unsigned int line_count, unsigned int field_count,
+    read_buffers_t read_buffers, unsigned int offset,
+    unsigned int data_mask, void *p)
 {
-    for (unsigned int i = 0; i < count; i ++)
-        *output++ = read_buffers[i][offset];
+    struct fa_entry *output = (struct fa_entry *) p;
+    for (unsigned int l = 0; l < line_count; l ++)
+    {
+        for (unsigned int i = 0; i < field_count; i ++)
+            *output++ = read_buffers[i][offset];
+        offset += 1;
+    }
 }
 
-static void d_write_line(
-    unsigned int count, read_buffers_t read_buffers, unsigned int offset,
-    unsigned int data_mask, struct fa_entry *output)
+static void d_write_lines(
+    unsigned int line_count, unsigned int field_count,
+    read_buffers_t read_buffers, unsigned int offset,
+    unsigned int data_mask, void *p)
 {
-    for (unsigned int i = 0; i < count; i ++)
+    struct fa_entry *output = (struct fa_entry *) p;
+    for (unsigned int l = 0; l < line_count; l ++)
     {
-        /* Each input buffer is an array of decimated_data structures which we
-         * index by offset, but we then cast this to an array of fa_entry
-         * structures to allow the individual fields to be selected by the
-         * data_mask. */
-        struct fa_entry *input = (struct fa_entry *)
-            &((struct decimated_data *) read_buffers[i])[offset];
-        if (data_mask & 1)  *output++ = input[0];
-        if (data_mask & 2)  *output++ = input[1];
-        if (data_mask & 4)  *output++ = input[2];
+        for (unsigned int i = 0; i < field_count; i ++)
+        {
+            /* Each input buffer is an array of decimated_data structures which
+             * we index by offset, but we then cast this to an array of fa_entry
+             * structures to allow the individual fields to be selected by the
+             * data_mask. */
+            struct fa_entry *input = (struct fa_entry *)
+                &((struct decimated_data *) read_buffers[i])[offset];
+            if (data_mask & 1)  *output++ = input[0];
+            if (data_mask & 2)  *output++ = input[1];
+            if (data_mask & 4)  *output++ = input[2];
+        }
+        offset += 1;
     }
 }
 
@@ -436,26 +431,23 @@ static size_t d_output_size(unsigned int data_mask)
 
 
 static struct reader fa_reader = {
-    .fixup_offset = fixup_fa_offset,
     .read_block = read_fa_block,
-    .write_line = fa_write_line,
+    .write_lines = fa_write_lines,
     .output_size = fa_output_size,
     .decimation = 1,
     .fa_blocks_per_block = 1,
 };
 
 static struct reader d_reader = {
-    .fixup_offset = fixup_d_offset,
     .read_block = read_d_block,
-    .write_line = d_write_line,
+    .write_lines = d_write_lines,
     .output_size = d_output_size,
     .fa_blocks_per_block = 1,
 };
 
 static struct reader dd_reader = {
-    .fixup_offset = fixup_dd_offset,
     .read_block = read_dd_block,
-    .write_line = d_write_line,
+    .write_lines = d_write_lines,
     .output_size = d_output_size,
 };
 
@@ -599,11 +591,11 @@ bool initialise_reader(const char *archive)
 
     /* Initialise dynamic part of reader structures. */
     fa_reader.block_total_count     = header->major_block_count;
-    fa_reader.max_samples_per_block = header->major_sample_count;
+    fa_reader.samples_per_fa_block  = header->major_sample_count;
 
     d_reader.decimation             = header->first_decimation;
     d_reader.block_total_count      = header->major_block_count;
-    d_reader.max_samples_per_block  = header->d_sample_count;
+    d_reader.samples_per_fa_block   = header->d_sample_count;
 
     dd_reader.decimation =
         header->first_decimation * header->second_decimation;
@@ -611,8 +603,7 @@ bool initialise_reader(const char *archive)
         buffer_size / sizeof(struct decimated_data) / header->dd_sample_count;
     dd_reader.block_total_count =
         round_up(header->major_block_count, dd_reader.fa_blocks_per_block);
-    dd_reader.max_samples_per_block =
-        buffer_size / sizeof(struct decimated_data);
+    dd_reader.samples_per_fa_block = header->dd_sample_count;
 
     return initialise_buffer_pool(buffer_size, 256);
 }
