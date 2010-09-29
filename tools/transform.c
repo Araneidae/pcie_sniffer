@@ -379,8 +379,7 @@ static void initialise_index(void)
 
 bool timestamp_to_index(
     uint64_t timestamp, uint64_t *samples_available,
-    unsigned int *major_block, unsigned int *offset,
-    uint64_t *timestamp_found)
+    unsigned int *major_block, unsigned int *offset)
 {
     bool ok;
     LOCK(transform_lock);
@@ -430,8 +429,6 @@ bool timestamp_to_index(
             current > low ? current - low : N - low + current;
         *samples_available =
             (uint64_t) block_count * header->major_sample_count - raw_offset;
-        *timestamp_found = block_start +
-            ((uint64_t) *offset * duration) / header->major_sample_count;
         ok =
             TEST_OK_(low != current, "Timestamp too late")  &&
             TEST_OK_(timestamp >= block_start, "Timestamp too early");
@@ -439,6 +436,46 @@ bool timestamp_to_index(
 
     UNLOCK(transform_lock);
     return ok;
+}
+
+
+bool find_gap(unsigned int *start, unsigned int *blocks)
+{
+    unsigned int current = header->current_major_block;
+
+    struct data_index *ix = &data_index[*start];
+    uint64_t timestamp = ix->timestamp + ix->duration;
+    uint32_t id_zero   = ix->id_zero + header->major_sample_count;
+    while (*blocks > 0)
+    {
+        *blocks -= 1;
+        *start += 1;
+        if (*start == header->major_block_count)
+            *start = 0;
+
+        if (*start == current)
+            /* Run off the array of available data. */
+            return false;
+        else
+        {
+            ix = &data_index[*start];
+            int64_t delta_t = ix->timestamp - timestamp;
+            int delta_id0 = ix->id_zero - id_zero;
+            if (delta_id0 != 0  ||
+                delta_t < -MAX_DELTA_T  ||  MAX_DELTA_T < delta_t)
+                return true;
+
+            timestamp = ix->timestamp + ix->duration;
+            id_zero = ix->id_zero + header->major_sample_count;
+        }
+    }
+    return false;
+}
+
+
+const struct data_index * read_index(unsigned int ix)
+{
+    return &data_index[ix];
 }
 
 

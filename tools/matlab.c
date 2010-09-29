@@ -21,14 +21,6 @@
 #define SECS_PER_DAY    (24 * 60 * 60)
 
 
-/* The matlab format symbol definitions we use. */
-#define miINT8          1
-#define miUINT8         2
-#define miINT16         3
-#define miUINT16        4
-#define miINT32         5
-#define miUINT32        6
-#define miDOUBLE        9
 
 #define miMATRIX        14
 
@@ -56,7 +48,7 @@ static size_t lookup_size(int format)
 }
 
 
-static int compute_mask_ids(uint8_t *array, filter_mask_t mask)
+int compute_mask_ids(uint8_t *array, filter_mask_t mask)
 {
     int count = 0;
     for (int bit = 0; bit < 256; bit ++)
@@ -81,7 +73,7 @@ static void write_matlab_string(int32_t **hh, const char *string)
 
 /* Returns the number of bytes of padding required after data_length bytes of
  * following data to ensure that the entire matrix is padded to 8 bytes. */
-static int write_matrix_header(
+int place_matrix_header(
     int32_t **hh, const char *name, int data_type,
     bool *squeeze, int data_length, int dimensions, ...)
 {
@@ -135,30 +127,30 @@ static void pad(int32_t **hh, int length, int padding)
 }
 
 
-static void write_matlab_value(
+void place_matlab_value(
     int32_t **hh, const char *name, int data_type, void *data)
 {
     size_t data_size = lookup_size(data_type);
-    int padding = write_matrix_header(
+    int padding = place_matrix_header(
         hh, name, data_type, NULL, data_size, 1, 1);
     memcpy(*hh, data, data_size);
     pad(hh, data_size, padding);
 }
 
 
-static void write_matlab_vector(
+void place_matlab_vector(
     int32_t **hh, const char *name, int data_type,
     void *data, int vector_length)
 {
     int data_length = lookup_size(data_type) * vector_length;
-    int padding = write_matrix_header(
+    int padding = place_matrix_header(
         hh, name, data_type, NULL, data_length, 2, 1, vector_length);
     memcpy(*hh, data, data_length);
     pad(hh, data_length, padding);
 }
 
 
-static void prepare_matlab_header(int32_t **hh, size_t buf_size)
+void prepare_matlab_header(int32_t **hh, size_t buf_size)
 {
     char *mat_header = (char *) *hh;
     memset(mat_header, 0, buf_size);
@@ -170,36 +162,6 @@ static void prepare_matlab_header(int32_t **hh, size_t buf_size)
     *(uint16_t *)&mat_header[124] = 0x0100;   // Version flag
     *(uint16_t *)&mat_header[126] = 0x4d49;   // 'IM' endian mark
     *hh = (int32_t *)&mat_header[128];
-}
-
-
-bool write_matlab_header(
-    int file_out, filter_mask_t filter_mask, unsigned int data_mask,
-    uint32_t decimation, double timestamp, double frequency,
-    unsigned int dump_length, const char *name, bool *squeeze)
-{
-    char mat_header[4096];
-    int32_t *h = (int32_t *) mat_header;
-    prepare_matlab_header(&h, sizeof(mat_header));
-
-    /* Write out the decimation, sample frequency and timestamp. */
-    write_matlab_value(&h, "decimation", miINT32, &decimation);
-    write_matlab_value(&h, "f_s", miDOUBLE, &frequency);
-    write_matlab_value(&h, "timestamp", miDOUBLE, &timestamp);
-
-    /* Write out the index array tying data back to original BPM ids. */
-    uint8_t mask_ids[FA_ENTRY_COUNT];
-    int mask_length = compute_mask_ids(mask_ids, filter_mask);
-    write_matlab_vector(&h, "ids", miUINT8, mask_ids, mask_length);
-
-    /* Finally write out the matrix mat_header for the fa data. */
-    int field_count = count_data_bits(data_mask);
-    write_matrix_header(&h, name,
-        miINT32, squeeze,
-        FA_ENTRY_SIZE * field_count * mask_length * dump_length,
-        4, 2, field_count, mask_length, dump_length);
-
-    return TEST_write(file_out, mat_header, (char *) h - mat_header);
 }
 
 

@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <inttypes.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
@@ -45,7 +46,7 @@ static unsigned int sample_count = 0;
 static enum data_format data_format = DATA_FA;
 static unsigned int data_mask = 1;
 static bool show_progress = true;
-static bool request_contiguous = true;
+static bool request_contiguous = false;
 static const char *data_name = "data";
 
 /* Archiver parameters read from archiver during initialisation. */
@@ -152,7 +153,7 @@ static void usage(char *argv0)
 "Usage: %s [options] <capture-mask> [<samples>]\n"
 "\n"
 "Captures sniffer frames from the FA archiver, either reading historical data\n"
-"(if -b, -t or -s is given) or live continuous data (if -C is specified).\n"
+"(if -b, -s or -t is given) or live continuous data (if -C is specified).\n"
 "\n"
 "<capture-mask> specifies precisely which BPM ids will be captured.\n"
 "The mask is specified as a comma separated sequence of ranges or BPM ids\n"
@@ -162,7 +163,7 @@ static void usage(char *argv0)
 "\n"
 "<samples> specifies how many samples will be captured or the sample time in\n"
 "seconds (if the number ends in s).  This must be specified when reading\n"
-"historical data (-s or -t).  If <samples> is not specified continuous\n"
+"historical data (-b, -s or -t).  If <samples> is not specified continuous\n"
 "capture (-C) can be interrupted with ctrl-C.\n"
 "\n"
 "Either a start time or continuous capture must be specified, and so\n"
@@ -184,8 +185,7 @@ static void usage(char *argv0)
 "           The bits in the data mask correspond to decimated fields:\n"
 "            1 => mean, 2 => min, 4 => max\n"
 "   -R   Save in raw format, otherwise the data is saved in matlab format\n"
-"   -g   Allow (unidentified) gaps in the captured sequence.  Only has any\n"
-"        effect on historical data\n"
+"   -c   Forbid any gaps in the captured sequence, contiguous data only\n"
 "   -k   Keep extra dimensions in matlab values\n"
 "   -n:  Specify name of data array (default is \"%s\")\n"
 "   -S:  Specify archive server to read from (default is\n"
@@ -286,7 +286,7 @@ static bool parse_opts(int *argc, char ***argv)
     bool ok = true;
     while (ok)
     {
-        switch (getopt(*argc, *argv, "+hRCo:S:qgkn:s:t:b:p:f:"))
+        switch (getopt(*argc, *argv, "+hRCo:S:qckn:s:t:b:p:f:"))
         {
             case 'h':   usage(argv0);                               exit(0);
             case 'R':   matlab_format = false;                      break;
@@ -294,7 +294,7 @@ static bool parse_opts(int *argc, char ***argv)
             case 'o':   output_filename = optarg;                   break;
             case 'S':   server_name = optarg;                       break;
             case 'q':   show_progress = false;                      break;
-            case 'g':   request_contiguous = false;                 break;
+            case 'c':   request_contiguous = true;                  break;
             case 'k':   squeeze_matlab = false;                     break;
             case 'n':   data_name = optarg;                         break;
             case 's':   ok = parse_start(parse_datetime, optarg);   break;
@@ -400,7 +400,7 @@ static bool request_data(int sock)
         }
         sprintf(request, "R%sMR%sS%ld.%09ldN%u%s%s\n",
             format, raw_mask, start.tv_sec, start.tv_nsec, sample_count,
-            request_contiguous ? "C" : "", matlab_format ? "T" : "");
+            matlab_format ? "TG" : "", request_contiguous ? "C" : "");
     }
     return TEST_write(sock, request, strlen(request));
 }
@@ -465,7 +465,7 @@ static unsigned int capture_data(int sock)
         count_mask_bits(capture_mask) * FA_ENTRY_SIZE;
     unsigned int frames_written = 0;
     char buffer[BUFFER_SIZE];
-    int residue = 0;            // Partial frame received, not yet written out
+    unsigned int residue = 0;   // Partial frame received, not yet written out
     while (running  &&  (sample_count == 0  ||  frames_written < sample_count))
     {
         int rx = read(sock, buffer + residue, BUFFER_SIZE - residue);
@@ -505,6 +505,40 @@ static unsigned int capture_data(int sock)
 }
 
 
+
+/* Gap list read from server. */
+#define MAX_GAP_COUNT   128     // Sanity limit
+static uint32_t gap_count;
+static uint32_t data_index[MAX_GAP_COUNT];
+static uint32_t id_zero[MAX_GAP_COUNT];
+static double gap_timestamps[MAX_GAP_COUNT];
+
+static bool read_gap_list(int sock)
+{
+    bool ok =
+        TEST_read(sock, &gap_count, sizeof(uint32_t))  &&
+        TEST_OK_(gap_count < MAX_GAP_COUNT,
+            "Implausible gap count of %"PRIu32" rejected", gap_count);
+    if (ok)
+    {
+        for (unsigned int i = 0; ok && i <= gap_count; i ++)
+        {
+            struct {
+                uint32_t data_index;
+                uint32_t id_zero;
+                uint64_t timestamp;
+            } gap_data;
+
+            ok = TEST_read(sock, &gap_data, sizeof(gap_data));
+            data_index[i] = gap_data.data_index;
+            id_zero[i] = gap_data.id_zero;
+            gap_timestamps[i] = matlab_timestamp(gap_data.timestamp);
+        }
+    }
+    return ok;
+}
+
+
 static bool write_header(unsigned int frames_written, uint64_t timestamp)
 {
     bool squeeze[4] = {
@@ -513,11 +547,39 @@ static bool write_header(unsigned int frames_written, uint64_t timestamp)
         squeeze_matlab,                             // BPM ID
         false                                       // Sample number
     };
-    int decimation = get_decimation();
-    return write_matlab_header(
-        output_file, capture_mask, data_mask, decimation,
-        matlab_timestamp(timestamp), sample_frequency / decimation,
-        frames_written, data_name, squeeze);
+    uint32_t decimation = get_decimation();
+    double m_timestamp = matlab_timestamp(timestamp);
+    double frequency = sample_frequency / decimation;
+
+    char mat_header[4096];
+    int32_t *h = (int32_t *) mat_header;
+    prepare_matlab_header(&h, sizeof(mat_header));
+
+    /* Write out the decimation, sample frequency and timestamp. */
+    place_matlab_value(&h, "decimation", miINT32, &decimation);
+    place_matlab_value(&h, "f_s",        miDOUBLE, &frequency);
+    place_matlab_value(&h, "timestamp",  miDOUBLE, &m_timestamp);
+
+    /* Write out the index array tying data back to original BPM ids. */
+    uint8_t mask_ids[FA_ENTRY_COUNT];
+    int mask_length = compute_mask_ids(mask_ids, capture_mask);
+    place_matlab_vector(&h, "ids", miUINT8, mask_ids, mask_length);
+
+    /* Write out the gap list data. */
+    place_matlab_vector(&h, "gapix", miINT32, data_index, gap_count + 1);
+    place_matlab_vector(&h, "id0",   miINT32, id_zero, gap_count + 1);
+    place_matlab_vector(&h, "gaptimes",
+        miDOUBLE, gap_timestamps, gap_count + 1);
+
+    /* Finally write out the matrix mat_header for the fa data. */
+    int field_count = count_data_bits(data_mask);
+    place_matrix_header(&h, data_name,
+        miINT32, squeeze,
+        FA_ENTRY_SIZE * field_count * mask_length * frames_written,
+        4, 2, field_count, mask_length, frames_written);
+
+    ASSERT_OK((char *) h < mat_header + sizeof(mat_header));
+    return TEST_write(output_file, mat_header, (char *) h - mat_header);
 }
 
 
@@ -529,14 +591,13 @@ static bool capture_and_save(int sock)
         uint64_t timestamp;
         return
             TEST_read(sock, &timestamp, sizeof(uint64_t))  &&
+            read_gap_list(sock)  &&
             write_header(sample_count, timestamp)  &&
             DO_(frames_written = capture_data(sock))  &&
             IF_(frames_written != sample_count,
-                /* Seek back to the start of the file and rewrite the header
-                 * with the correct capture count.  We guard against the
-                 * improbable misfortune of one frame, because in that case
-                 * writing will break. */
-                TEST_OK(frames_written > 1)  &&
+                /* For an incomplete capture, probably an interrupted continuous
+                 * capture, we need to rewrite the header with the correct
+                 * capture count. */
                 TEST_IO_(lseek(output_file, 0, SEEK_SET),
                     "Cannot update matlab file, file not seekable")  &&
                 write_header(frames_written, timestamp));

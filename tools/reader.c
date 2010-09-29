@@ -197,15 +197,14 @@ static bool check_run(
 static bool compute_start(
     const struct reader *reader,
     uint64_t start, unsigned int samples, bool only_contiguous,
-    unsigned int *block, unsigned int *offset, uint64_t *timestamp)
+    unsigned int *block, unsigned int *offset)
 {
     uint64_t available;
     unsigned int fa_block;
     return
         /* Convert requested timestamp into a starting index block and FA offset
          * into that block. */
-        timestamp_to_index(
-            start, &available, &fa_block, offset, timestamp)  &&
+        timestamp_to_index(start, &available, &fa_block, offset)  &&
         DO_(*block = fa_block)  &&
         /* Convert FA block, offset and available counts into numbers
          * appropriate for our current data type. */
@@ -216,6 +215,84 @@ static bool compute_start(
             available, samples)  &&
         IF_(only_contiguous,
             check_run(reader, fa_block, samples, *offset));
+}
+
+
+static bool send_timestamp(
+    const struct reader *reader, int scon,
+    unsigned int block, unsigned int offset)
+{
+    /* Convert back to start and offset in index blocks. */
+    unsigned int samples_per_block = reader->samples_per_fa_block;
+    const struct data_index *data_index = read_index(
+        block * reader->fa_blocks_per_block + offset / samples_per_block);
+    unsigned int data_offset = offset % samples_per_block;
+    uint64_t timestamp =
+        data_index->timestamp +
+        (uint64_t) data_offset * data_index->duration /
+            reader->samples_per_fa_block;
+    return TEST_write(scon, &timestamp, sizeof(uint64_t));
+}
+
+
+
+static bool send_gaplist(
+    const struct reader *reader, int scon,
+    unsigned int block, unsigned int offset, unsigned int samples)
+{
+    const struct disk_header *header = get_header();
+
+    /* First convert block, offset and samples into an index block count. */
+    unsigned int samples_per_block = reader->samples_per_fa_block;
+    unsigned int ix_start =
+        block * reader->fa_blocks_per_block + offset / samples_per_block;
+    unsigned int data_offset = offset % samples_per_block;
+    unsigned int ix_count = round_up(samples + data_offset, samples_per_block);
+    unsigned int N = header->major_block_count;
+
+    /* Now count the gaps. */
+    uint32_t gap_count = 0;
+    for (unsigned int ix_block_ = ix_start, ix_count_ = ix_count;
+            find_gap(&ix_block_, &ix_count_); )
+        gap_count += 1;
+
+    /* Send the gap count and gaps to the client.  We don't bother to write
+     * buffer this as this won't happen very often. */
+    bool ok = TEST_write(scon, &gap_count, sizeof(uint32_t));
+    unsigned int ix_block = ix_start;
+    for (unsigned int i = 0;  ok  &&  i <= gap_count;  i ++)
+    {
+        struct {
+            uint32_t data_index;
+            uint32_t id_zero;
+            uint64_t timestamp;
+        } gap_data;
+        const struct data_index *data_index = read_index(ix_block);
+        gap_data.timestamp = data_index->timestamp;
+        gap_data.id_zero = data_index->id_zero;
+        if (i == 0)
+        {
+            /* The first data point needs to be adjusted so that it's the first
+             * delivered data point, not the first point in the index block. */
+            gap_data.data_index = 0;
+            gap_data.id_zero += data_offset * reader->decimation;
+            gap_data.timestamp +=
+                (uint64_t) data_offset * data_index->duration /
+                    reader->samples_per_fa_block;
+        }
+        else
+        {
+            /* For subsequent blocks the offset into the data stream will be on
+             * an index block boundary, but offset by our start offset. */
+            unsigned int blocks = ix_block >= ix_start ?
+                ix_block - ix_start : ix_block - ix_start + N;
+            gap_data.data_index = blocks * samples_per_block - data_offset;
+        }
+
+        ok = TEST_write(scon, &gap_data, sizeof(gap_data));
+        find_gap(&ix_block, &ix_count);
+    }
+    return ok;
 }
 
 
@@ -273,17 +350,15 @@ static bool read_data(
     const struct reader *reader, int scon,
     unsigned int data_mask, filter_mask_t read_mask,
     uint64_t start, unsigned int samples,
-    bool only_contiguous, bool want_timestamp)
+    bool only_contiguous, bool want_timestamp, bool gaplist)
 {
     unsigned int block, offset;
-    uint64_t timestamp;
     struct iter_mask iter = { 0 };
     read_buffers_t read_buffers = NULL;
     int archive = -1;
     bool ok =
         compute_start(
-            reader, start, samples, only_contiguous,
-            &block, &offset, &timestamp)  &&
+            reader, start, samples, only_contiguous, &block, &offset)  &&
         mask_to_archive(read_mask, &iter)  &&
         lock_buffers(&read_buffers, iter.count)  &&
         TEST_IO(archive = open(archive_filename, O_RDONLY));
@@ -292,7 +367,9 @@ static bool read_data(
     if (ok  &&  write_ok)
         write_ok =
             IF_(want_timestamp,
-                TEST_write(scon, &timestamp, sizeof(uint64_t)))  &&
+                send_timestamp(reader, scon, block, offset))  &&
+            IF_(gaplist,
+                send_gaplist(reader, scon, block, offset, samples))  &&
             transfer_data(
                 reader, read_buffers, archive, scon,
                 &iter, data_mask, block, offset, samples);
@@ -470,13 +547,14 @@ static struct reader dd_reader = {
  *  source = "F" | "D" ["D"] ["F" data-mask]
  *  samples = integer
  *  data-mask = integer
- *  options = [ "C" ] [ "T" ]
+ *  options = [ "T" ] [ "G" ] [ "C" ]
  *
  * The options can only appear in the order given and have the following
  * meanings:
  *
- *  C   Ensure no gaps in selected dataset, fail if any
  *  T   Send timestamp at head of dataset
+ *  G   Send gap list at end of data capture
+ *  C   Ensure no gaps in selected dataset, fail if any
  */
 
 /* Result of parsing a read command. */
@@ -488,6 +566,7 @@ struct read_parse {
     unsigned int data_mask;         // Data mask for D and DD data
     bool only_contiguous;           // Only contiguous data acceptable
     bool timestamp;                 // Send timestamp at start of data
+    bool gaplist;                   // Send gaplist after data
 };
 
 
@@ -536,11 +615,12 @@ static bool parse_start(const char **string, uint64_t *start)
 }
 
 
-/* options = [ "C" ] [ "T" ] . */
+/* options = [ "T" ] [ "G" ] [ "C" ] . */
 static bool parse_options(const char **string, struct read_parse *parse)
 {
-    parse->only_contiguous = read_char(string, 'C');
     parse->timestamp = read_char(string, 'T');
+    parse->gaplist = read_char(string, 'G');
+    parse->only_contiguous = read_char(string, 'C');
     return true;
 }
 
@@ -574,7 +654,7 @@ bool process_read(int scon, const char *buf)
         return read_data(
             parse.reader, scon, parse.data_mask,
             parse.read_mask, parse.start, parse.samples,
-            parse.only_contiguous, parse.timestamp);
+            parse.only_contiguous, parse.timestamp, parse.gaplist);
     else
         return report_socket_error(scon, false);
 }
