@@ -378,7 +378,7 @@ static bool request_data(int sock)
     format_raw_mask(capture_mask, raw_mask);
     char request[1024];
     if (continuous_capture)
-        sprintf(request, "SR%s\n", raw_mask);
+        sprintf(request, "SR%s%s\n", raw_mask, matlab_format ? "T" : "");
     else
     {
         char format[16];

@@ -115,11 +115,13 @@ static bool process_command(int scon, const char *buf)
 
 
 /* A subscribe request is either S<mask> or SR<raw-mask>. */
-static bool parse_subscription(const char **string, filter_mask_t mask)
+static bool parse_subscription(
+    const char **string, filter_mask_t mask, bool *want_timestamp)
 {
     return
         parse_char(string, 'S')  &&
-        parse_mask(string, mask);
+        parse_mask(string, mask)  &&
+        DO_(*want_timestamp = read_char(string, 'T'));
 }
 
 
@@ -152,37 +154,50 @@ static bool process_subscribe(int scon, const char *buf)
 {
     filter_mask_t mask;
     push_error_handling();
-    bool parse_ok = DO_PARSE("subscription", parse_subscription, buf, mask);
+    bool want_timestamp;
+    bool parse_ok = DO_PARSE(
+        "subscription", parse_subscription, buf, mask, &want_timestamp);
     bool ok = report_socket_error(scon, parse_ok);
 
-    if (parse_ok)
+    if (parse_ok  &&  ok)
     {
         struct reader_state *reader = open_reader(false);
+        struct timespec ts;
+        const void *block = get_read_block(reader, NULL, &ts);
+        ok = TEST_NULL_(block, "No data currently available");
+        if (ok  &&  want_timestamp)
+        {
+            uint64_t timestamp =
+                (uint64_t) ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+            ok = TEST_write(scon, &timestamp, sizeof(uint64_t));
+        }
+
         while (ok)
         {
-            const void *block;
-            ok =
-                TEST_NULL_(
+            ok = FINALLY(
+                write_frames(scon, mask, block, fa_block_size / FA_FRAME_SIZE),
+                // Always do this, even if write_frames fails.
+                TEST_OK_(release_read_block(reader),
+                    "Write underrun to client"));
+            if (ok)
+                ok = TEST_NULL_(
                     block = get_read_block(reader, NULL, NULL),
-                    "Gap in subscribed data")  &&
-                FINALLY(
-                    write_frames(
-                        scon, mask, block, fa_block_size / FA_FRAME_SIZE),
-                    // Finally, even if write_frames() fails.
-                    TEST_OK_(release_read_block(reader),
-                        "Write underrun to client"));
+                    "Gap in subscribed data");
+            else
+                block = NULL;
         }
+        if (block != NULL)
+            release_read_block(reader);
+
         close_reader(reader);
-        return ok;
     }
-    else
-        return TEST_OK_(false, "Syntax error");
+    return ok;
 }
 
 
 static bool process_error(int scon, const char *buf)
 {
-    return TEST_OK_(false, "Invalid command");
+    return write_string(scon, "Invalid command\n");
 }
 
 
