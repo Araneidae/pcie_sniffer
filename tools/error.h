@@ -25,12 +25,6 @@ void vlog_message(int priority, const char *format, va_list args);
 void push_error_handling(void);
 void pop_error_handling(char **error_message);
 
-/* Two printf style support functions: these both print to a heap allocated
- * string, and the caller is responsible for freeing the returned string. */
-char * hprintf(const char *format, ...)
-    __attribute__((format(printf, 1, 2)));
-char * vhprintf(const char *format, va_list args);
-
 
 /* Internal routines called by error handling macros below. */
 void print_error(const char * message, ...)

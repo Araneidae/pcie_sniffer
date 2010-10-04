@@ -38,9 +38,11 @@ static bool __attribute__((format(printf, 2, 3)))
 {
     va_list args;
     va_start(args, format);
-    char *buffer = vhprintf(format, args);
-    bool ok = TEST_write_(
-        sock, buffer, strlen(buffer), "Unable to write response");
+    char *buffer = NULL;
+    bool ok =
+        TEST_IO(vasprintf(&buffer, format, args))  &&
+        TEST_write_(
+            sock, buffer, strlen(buffer), "Unable to write response");
     free(buffer);
     return ok;
 }

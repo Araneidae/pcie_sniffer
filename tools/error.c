@@ -72,29 +72,6 @@ static bool save_message(char *message)
 
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-/* Printf to the heap. */
-
-char * vhprintf(const char *format, va_list args)
-{
-    /* To determine how long the resulting string should be we print the string
-     * twice, first into an empty buffer. */
-    int length = vsnprintf(NULL, 0, format, args) + 1;
-    char *buffer = malloc(length);
-    vsnprintf(buffer, length, format, args);
-    return buffer;
-}
-
-
-char * hprintf(const char *format, ...)
-{
-    va_list args;
-    va_start(args, format);
-    return vhprintf(format, args);
-}
-
-
-
-/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 /* Error handling and logging. */
 
 DECLARE_LOCKING(lock);
@@ -168,7 +145,8 @@ static char * add_strerror(char *message, int last_errno)
          * Ah well.  We go with the GNU definition, so here is a buffer to
          * maybe use for the message. */
         char StrError[64];
-        char *result = hprintf("%s: (%d) %s", message, last_errno,
+        char *result;
+        asprintf(&result, "%s: (%d) %s", message, last_errno,
             strerror_r(last_errno, StrError, sizeof(StrError)));
         free(message);
         return result;
@@ -181,7 +159,9 @@ void print_error(const char * format, ...)
     int last_errno = errno;
     va_list args;
     va_start(args, format);
-    char *message = add_strerror(vhprintf(format, args), last_errno);
+    char *message;
+    vasprintf(&message, format, args);
+    message = add_strerror(message, last_errno);
     if (!save_message(message))
     {
         log_error("%s", message);
@@ -193,8 +173,9 @@ void print_error(const char * format, ...)
 void panic_error(const char * filename, int line)
 {
     int last_errno = errno;
-    char *message = add_strerror(
-        hprintf("panic at %s, line %d", filename, line), last_errno);
+    char *message;
+    asprintf(&message, "panic at %s, line %d", filename, line);
+    message = add_strerror(message, last_errno);
     log_error("%s", message);
     free(message);
 
