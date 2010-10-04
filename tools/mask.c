@@ -44,12 +44,6 @@ int format_raw_mask(const filter_mask_t mask, char *buffer)
     return 2 * sizeof(filter_mask_t);
 }
 
-void print_raw_mask(FILE *out, const filter_mask_t mask)
-{
-    char buffer[2 * sizeof(filter_mask_t) + 1];
-    fwrite(buffer, format_raw_mask(mask, buffer), 1, out);
-}
-
 
 
 static bool parse_id(const char **string, int *id)
@@ -74,7 +68,7 @@ static bool parse_raw_mask(const char **string, filter_mask_t mask)
         else if ('A' <= ch  &&  ch <= 'F')
             nibble = ch - 'A' + 10;
         else
-            return TEST_OK_(false, "Unexpected character in mask");
+            return FAIL_("Unexpected character in mask");
         mask[i / 8] |= nibble << (4 * (i % 8));     // 8 nibbles per word
     }
     return true;

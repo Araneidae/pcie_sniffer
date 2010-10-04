@@ -222,7 +222,8 @@ static bool parse_today(const char **string, struct timespec *ts)
     return
         parse_time(string, ts)  &&
         DO_(start.tv_sec += midnight_today())  &&
-        IF_(read_char(string, 'Y'), DO_(start.tv_sec -= 24 * 3600));
+        IF_(read_char(string, 'Y'),
+            DO_(start.tv_sec -= 24 * 3600));
 }
 
 
@@ -240,7 +241,7 @@ static bool parse_data_format(const char **string, enum data_format *format)
         else if (read_char(string, 'D'))
             *format = DATA_DD;
         else
-            return TEST_OK_(false, "Invalid data format");
+            return FAIL_("Invalid data format");
 
         if (**string == '\0')
         {
@@ -439,7 +440,7 @@ static void update_progress(unsigned int frames_written, size_t frame_size)
         fprintf(stderr, "%c %9d",
             progress[(bytes_written / PROGRESS_INTERVAL) % 4], frames_written);
         if (sample_count > 0)
-            fprintf(stderr, " (%5.2f%%)", 
+            fprintf(stderr, " (%5.2f%%)",
                 100.0 * (double) frames_written / sample_count);
         fprintf(stderr, "\r");
         fflush(stderr);

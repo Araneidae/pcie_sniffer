@@ -603,7 +603,7 @@ static bool parse_source(const char **string, struct read_parse *parse)
             return true;
     }
     else
-        return TEST_OK_(false, "Invalid source specification");
+        return FAIL_("Invalid source specification");
 }
 
 
@@ -617,7 +617,7 @@ static bool parse_start(const char **string, uint64_t *start)
     else if (read_char(string, 'S'))
         ok = parse_seconds(string, &ts);
     else
-        ok = TEST_OK_(false, "Expected T or S for timestamp");
+        ok = FAIL_("Expected T or S for timestamp");
     ok = ok  &&  TEST_OK_(ts.tv_sec > 0, "Timestamp ridiculously early");
     *start = 1000000 * (uint64_t) ts.tv_sec + ts.tv_nsec / 1000;
     return ok;

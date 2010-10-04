@@ -28,8 +28,6 @@ unsigned int count_mask_bits(const filter_mask_t mask);
  * RAW_MASK_BYTES+1 bytes long.  Returns RAW_MASK_BYTES, number of characters
  * written. */
 int format_raw_mask(const filter_mask_t mask, char *buffer);
-/* Prints mask. */
-void print_raw_mask(FILE *out, const filter_mask_t mask);
 
 /* Attempts to parse string as a mask specification, consisting of a sequence
  * of comma separated numbers or ranges, where a range is a pair of numbers

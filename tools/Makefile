@@ -31,6 +31,7 @@ CFLAGS += -ffast-math
 
 CPPFLAGS += -D_GNU_SOURCE
 CPPFLAGS += -D_FILE_OFFSET_BITS=64
+CPPFLAGS += -D_FORTIFY_SOURCE=2
 
 LDFLAGS += -lpthread -lrt -lm
 

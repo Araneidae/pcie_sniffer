@@ -247,9 +247,11 @@ int main(int argc, char **argv)
                 O_WRONLY | O_DIRECT | open_flags, 0664),
                 "Unable to write to file \"%s\"", file_name)  &&
             lock_archive(file_fd)  &&
-            IF_(!file_size_given, get_filesize(file_fd, &file_size))  &&
+            IF_(!file_size_given,
+                get_filesize(file_fd, &file_size))  &&
             write_new_header(file_fd, &written)  &&
-            IF_(file_size_given, fill_zeros(file_fd, written))  &&
+            IF_(file_size_given,
+                fill_zeros(file_fd, written))  &&
             TEST_IO(close(file_fd));
     }
 

@@ -93,6 +93,8 @@ void panic_error(const char * filename, int line)
 #define TEST_0(expr)                    TEST_0_(expr, ERROR_MESSAGE)
 #define ASSERT_0(expr)                  ASSERT_(_COND_0, expr)
 
+/* For failing immediately.  Same as TEST_OK_(false, message...) */
+#define FAIL_(message...)  ( { print_error(message); false; } )
 
 
 /* These two macros facilitate using the macros above by creating if
