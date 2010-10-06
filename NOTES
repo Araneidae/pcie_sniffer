@@ -31,3 +31,32 @@ In this case the actual path must be passed.  For example:
 ----
 udevinfo -a -p /sys/class/fa_sniffer/fa_sniffer0
 ----
+
+
+Device configuration with udev
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The FA archiver tool runs best with direct output to a target block device.  For
+this to be successful the device needs to be writeable.  One solution is to
+ensure that the FA archiver runs as a member of a group, say `targetdev`, with
+the following line in `/etc/udev/rules.d/`:
+
+----
+KERNEL=="sdb", GROUP="targetdev", MODE="0660", OPTIONS="last_rule"
+----
+
+
+Installation using dkms
+-----------------------
+
+To install on target system, let `$SOURCE` be the directory containing the
+fa_sniffer driver, then the following commands should be sufficient for a
+complete installation (on RHEL 5):
+
+----
+# cp $SOURCE/fa_sniffer.rules /etc/udev/rules.d
+# ln -fsn $SOURCE /usr/src/fa_sniffer-1.0
+# dkms add -m fa_sniffer -v 1.0
+# dkms build -m fa_sniffer -v 1.0
+# dkms install -m fa_sniffer -v 1.0
+----
