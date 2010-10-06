@@ -5,8 +5,9 @@
 
 BUILD_DIR = build
 
-all $(filter-out all $(BUILD_DIR) clean,$(MAKECMDGOALS)): $(BUILD_DIR)
-	VPATH=$(CURDIR) $(MAKE) -C $(BUILD_DIR) -f ../Makefile $@
+all $(filter-out all clean $(BUILD_DIR),$(MAKECMDGOALS)): $(BUILD_DIR)
+	VPATH=$(CURDIR) $(MAKE) \
+            SRCDIR=$(CURDIR) -C $(BUILD_DIR) -f $(CURDIR)/Makefile $@
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
@@ -14,4 +15,4 @@ $(BUILD_DIR):
 clean:
 	rm -rf $(BUILD_DIR)
 
-.PHONY: clean
+.PHONY: all clean

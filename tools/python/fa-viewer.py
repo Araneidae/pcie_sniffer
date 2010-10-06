@@ -1,5 +1,3 @@
-#!/usr/bin/env dls-python2.6
-
 '''Viewer of live FA beam position data.'''
 
 from pkg_resources import require
@@ -12,7 +10,6 @@ import cothread
 import numpy
 from PyQt4 import Qwt5, QtGui, QtCore, uic
 
-sys.path.append(os.path.dirname(__file__))
 import falib
 
 

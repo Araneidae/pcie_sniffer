@@ -1,0 +1,6 @@
+#!/bin/sh
+
+# These definitions are designed to be overridden by the installer.
+PYTHON=dls-python2.6
+HERE="$(dirname "$0")"
+"$PYTHON" "$HERE"/fa-viewer.py "$@"
