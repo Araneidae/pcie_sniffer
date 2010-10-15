@@ -2,3 +2,6 @@
 # Copy this file to /etc/udev/rules.d
 
 SUBSYSTEM=="fa_sniffer", MODE="0444", OPTIONS="last_rule"
+
+# Extra rule to make /dev/sdb accessible
+# KERNEL=="sdb", OWNER="epics_user", GROUP="targetdev", MODE="0660", OPTIONS="last_rule"

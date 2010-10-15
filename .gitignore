@@ -1,4 +1,4 @@
 /kbuild-*
 /*.html
-/tools/build
+/rpmbuild
 *.pyc

@@ -18,7 +18,7 @@ NOTES.html: NOTES
 	asciidoc $^
 
 clean:
-	rm -rf $(KBUILD_DIR) kbuild-* NOTES.html
+	rm -rf $(KBUILD_DIR) kbuild-* NOTES.html rpmbuild
 
 .PHONY: clean default
 
@@ -36,4 +36,12 @@ insmod: $(KBUILD_DIR)/fa_sniffer.ko
 rmmod:
 	sudo /sbin/rmmod fa_sniffer.ko
 
-.PHONY: test insmod rmmod
+rpm:
+	mkdir -p rpmbuild/RPMS rpmbuild/BUILD
+	rpmbuild -bb \
+	    --define "_topdir $(CURDIR)/rpmbuild" \
+            --define "_sourcedir $(CURDIR)" \
+            --define '_tmppath %{_topdir}/BUILD' \
+            fa_sniffer.spec
+
+.PHONY: test insmod rmmod rpm
