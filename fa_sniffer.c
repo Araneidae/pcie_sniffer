@@ -176,12 +176,12 @@ static void set_dma_buffer(struct fa_sniffer_hw *hw, dma_addr_t buffer)
     /* Get Maximum TLP size and compute how many TLPs are required for one
      * frame of 2048 bytes */
     u32 bTrafficClass = 0;  // Default Memory Write TLP Traffic Class
-    u32 fEnable64bit = 1;   // Enable 64b Memory Write TLP Generation
 #if defined(CONFIG_X86_64) || defined(CONFIG_HIGHMEM64G)
     u32 top_address = (u32) (buffer >> 32);
 #else
     u32 top_address = 0;
 #endif
+    bool fEnable64bit = top_address != 0;
 
     /* Format of wdmatlps (in bits):
      *  31:24   Bits 39:32 of the DMA address
@@ -197,7 +197,10 @@ static void set_dma_buffer(struct fa_sniffer_hw *hw, dma_addr_t buffer)
         ((hw->tlp_size / 4) & 0x1FFF);
     u32 bottom_word = (u32) buffer;
 
+    /* Ensure bottom word written befor top word, and serialise writes to help
+     * with initialisation. */
     writel(bottom_word, &hw->regs->wdmatlpa);
+    readl(&hw->regs->dcsr);
     writel(top_word,    &hw->regs->wdmatlps);
 }
 
