@@ -60,3 +60,15 @@ complete installation (on RHEL 5):
 # dkms build -m fa_sniffer -v 1.0
 # dkms install -m fa_sniffer -v 1.0
 ----
+
+
+Using `rpmbuild`
+~~~~~~~~~~~~~~~~
+
+Annoyingly difficult to find sensible documentation for `rpmbuild`.  Here are a
+variety of urls:
+
+http://reality.sgiweb.org/davea/rpmbuild.html[]
+http://www.ibm.com/developerworks/library/l-rpm1/[]
+http://www.rpm.org/max-rpm/index.html[]
+http://www.rpm.org/max-rpm-snapshot[]
