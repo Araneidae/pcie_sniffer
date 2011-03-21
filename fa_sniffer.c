@@ -25,7 +25,7 @@
 MODULE_AUTHOR("Michael Abbott, Diamond Light Source Ltd.");
 MODULE_DESCRIPTION("Driver for PCIe Fast Acquisition Sniffer");
 MODULE_LICENSE("GPL");
-MODULE_VERSION("1.0");
+MODULE_VERSION("1.1");
 
 
 
