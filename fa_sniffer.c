@@ -93,7 +93,7 @@ struct x5pcie_dma_registers {
 };
 
 struct fa_sniffer_hw {
-    struct x5pcie_dma_registers * regs;
+    struct x5pcie_dma_registers *regs;
     int tlp_size;   // Max length of single PCI DMA transfer (in bytes)
 };
 
@@ -309,7 +309,7 @@ static int fa_hw_status(struct fa_sniffer_hw *hw)
  * going to allocate the block with __get_free_page(). */
 #define FA_BLOCK_SHIFT      19      // 2**19 = 512K
 #define FA_BLOCK_SIZE       (1 << FA_BLOCK_SHIFT)
-#define FA_BUFFER_COUNT     5
+#define FA_BUFFER_COUNT     4
 #define FA_BLOCK_FRAMES     (FA_BLOCK_SIZE / FA_FRAME_SIZE)
 
 
@@ -327,17 +327,18 @@ struct fa_sniffer {
     struct fa_sniffer_hw *hw;   // Hardware resources
     unsigned long open_flag;    // Interlock: only one open at a time!
     int last_interrupt;         // Status word from last interrupt
+
+    /* Circular buffer for interface from DMA to userspace read. */
+    struct fa_block {
+        void *block;
+        dma_addr_t dma;
+        enum fa_block_state state;
+    } buffers[FA_BUFFER_COUNT];
 };
 
 struct fa_sniffer_open {
     struct fa_sniffer *fa_sniffer;
     wait_queue_head_t wait_queue;
-
-    struct fa_block {
-        void * block;
-        dma_addr_t dma;
-        enum fa_block_state state;
-    } buffers[FA_BUFFER_COUNT];
 
     /* Device status.  There are two DMA buffers allocated to the device, one
      * currently being read, the next queued to be read.  We will be
@@ -364,9 +365,9 @@ static inline int step_index(int ix, int step)
 
 static irqreturn_t fa_sniffer_isr(
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,19)
-    int irq, void * dev_id)
+    int irq, void *dev_id)
 #else
-    int irq, void * dev_id, struct pt_regs *pt_regs)
+    int irq, void *dev_id, struct pt_regs *pt_regs)
 #endif
 {
     struct fa_sniffer_open *open = dev_id;
@@ -380,7 +381,7 @@ static irqreturn_t fa_sniffer_isr(
     {
         /* Normal DMA complete interrupt, data in hand is ready: set up the
          * next transfer and let the read know that there's data to read. */
-        struct fa_block *filled_block = & open->buffers[filled_ix];
+        struct fa_block *filled_block = &open->fa_sniffer->buffers[filled_ix];
         pci_dma_sync_single_for_cpu(pdev,
             filled_block->dma, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
         smp_wmb();  // Guards DMA transfer for block we've just read
@@ -391,7 +392,7 @@ static irqreturn_t fa_sniffer_isr(
     {
         /* DMA transfer still in progress.  Set up a new DMA buffer. */
         int fresh_ix = step_index(filled_ix, 2);
-        struct fa_block *fresh_block = & open->buffers[fresh_ix];
+        struct fa_block *fresh_block = &open->fa_sniffer->buffers[fresh_ix];
 
         if (fresh_block->state == fa_block_free)
         {
@@ -451,36 +452,13 @@ static int fa_sniffer_open(struct inode *inode, struct file *file)
     open->fa_sniffer = fa_sniffer;
     file->private_data = open;
 
-    /* Prepare the circular buffer. */
-    int blk;
-    for (blk = 0; blk < FA_BUFFER_COUNT; blk++)
-    {
-        struct fa_block *block = &open->buffers[blk];
-        /* We ask for "cache cold" pages just to optimise things, as these
-         * pages won't be read without DMA first.  We allocate free pages
-         * (rather than using kmalloc) as this appears to be a better match to
-         * our application.
-         *    Seems that this one returns 0 rather than an error pointer
-         * on failure. */
-        block->block = (void *) __get_free_pages(
-            GFP_KERNEL | __GFP_COLD, FA_BLOCK_SHIFT - PAGE_SHIFT);
-        TEST_((unsigned long) block->block == 0, rc = -ENOMEM,
-            no_block, "Unable to allocate buffer");
-
-        /* Map each block for DMA. */
-        block->dma = pci_map_single(
-            pdev, block->block, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
-        TEST_(pci_dma_mapping_error(
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,27)
-                    pdev,
-#endif
-                    block->dma),
-            rc = -EIO, no_dma_map, "Unable to map DMA block");
-        block->state = fa_block_free;
-    }
-    /* The first two buffers will be handed straight to the hardware. */
-    open->buffers[0].state = fa_block_dma;
-    open->buffers[1].state = fa_block_dma;
+    /* Prepare the circular buffer.  The first two buffers will be handed
+     * straight to the hardware, mark the rest as free. */
+    fa_sniffer->buffers[0].state = fa_block_dma;
+    fa_sniffer->buffers[1].state = fa_block_dma;
+    int i;
+    for (i = 2; i < FA_BUFFER_COUNT; i ++)
+        fa_sniffer->buffers[i].state = fa_block_free;
 
     prepare_dma(fa_sniffer->hw, FA_BLOCK_FRAMES);
 
@@ -490,28 +468,13 @@ static int fa_sniffer_open(struct inode *inode, struct file *file)
     TEST_RC(rc, no_irq, "Unable to request irq");
 
     /* Prepare the initial hardware DMA buffers. */
-    set_dma_buffer(fa_sniffer->hw, open->buffers[0].dma);
+    set_dma_buffer(fa_sniffer->hw, fa_sniffer->buffers[0].dma);
     start_fa_hw(fa_sniffer->hw);
-    set_dma_buffer(fa_sniffer->hw, open->buffers[1].dma);
+    set_dma_buffer(fa_sniffer->hw, fa_sniffer->buffers[1].dma);
 
     return 0;
 
 no_irq:
-
-    /* Release circular buffer resources.  Rather tricky interaction with
-     * allocation loop above so that we release precisely those resources we
-     * allocated, in reverse order. */
-    do {
-        blk -= 1;
-        pci_unmap_single(pdev, open->buffers[blk].dma,
-            FA_BLOCK_SIZE, DMA_FROM_DEVICE);
-no_dma_map:
-        free_pages((unsigned long) open->buffers[blk].block,
-            FA_BLOCK_SHIFT - PAGE_SHIFT);
-no_block:
-        ;
-    } while (blk > 0);
-
     kfree(open);
 no_open:
     return rc;
@@ -528,17 +491,10 @@ static int fa_sniffer_release(struct inode *inode, struct file *file)
     stop_fa_hw(fa_sniffer->hw);
     /* This wait must not be interruptible, as the pages below cannot be
      * safely released until the last ISR has been received. */
+    // However, we ought to use a timed wait anyhow
     wait_for_completion(&open->isr_done);
     free_irq(pdev->irq, open);
 
-    int blk;
-    for (blk = 0; blk < FA_BUFFER_COUNT; blk++)
-    {
-        pci_unmap_single(pdev, open->buffers[blk].dma,
-            FA_BLOCK_SIZE, DMA_FROM_DEVICE);
-        free_pages((unsigned long) open->buffers[blk].block,
-            FA_BLOCK_SHIFT - PAGE_SHIFT);
-    }
     kfree(open);
 
     /* Do this last to let somebody else use this device. */
@@ -557,7 +513,8 @@ static ssize_t fa_sniffer_read(
         /* Wait for data to arrive in the current block.  We can be
          * interrupted by a process signal, or can detect end of input, due
          * to either buffer overrun or communication controller timeout. */
-        struct fa_block * block = & open->buffers[open->read_block_index];
+        struct fa_block *block =
+            &open->fa_sniffer->buffers[open->read_block_index];
         int rc = wait_event_interruptible(open->wait_queue,
             block->state == fa_block_data  ||  open->stopped);
         if (rc < 0)
@@ -602,6 +559,77 @@ static struct file_operations fa_sniffer_fops = {
 };
 
 
+/*****************************************************************************/
+/*                          Circular Buffer Management                       */
+/*****************************************************************************/
+
+
+static int allocate_fa_buffers(
+    struct pci_dev *pdev,struct fa_sniffer *fa_sniffer)
+{
+    int rc;
+
+    /* Prepare the circular buffer. */
+    int blk;
+    for (blk = 0; blk < FA_BUFFER_COUNT; blk++)
+    {
+        struct fa_block *block = &fa_sniffer->buffers[blk];
+        /* We ask for "cache cold" pages just to optimise things, as these pages
+         * won't be read without DMA first.  We allocate free pages (rather than
+         * using kmalloc) as this appears to be a better match to our
+         * application.
+         *    Seems that this one returns 0 rather than an error pointer on
+         * failure. */
+        block->block = (void *) __get_free_pages(
+            GFP_KERNEL | __GFP_COLD, FA_BLOCK_SHIFT - PAGE_SHIFT);
+        TEST_((unsigned long) block->block == 0, rc = -ENOMEM,
+            no_block, "Unable to allocate buffer");
+
+        /* Map each block for DMA. */
+        block->dma = pci_map_single(
+            pdev, block->block, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
+        TEST_(pci_dma_mapping_error(
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,27)
+                    pdev,
+#endif
+                    block->dma),
+            rc = -EIO, no_dma_map, "Unable to map DMA block");
+        block->state = fa_block_free;
+    }
+
+    return 0;
+
+
+    /* Release circular buffer resources on error.  Rather tricky interaction
+     * with allocation loop above so that we release precisely those resources
+     * we allocated, in reverse order. */
+    do {
+        blk -= 1;
+        pci_unmap_single(pdev, fa_sniffer->buffers[blk].dma,
+            FA_BLOCK_SIZE, DMA_FROM_DEVICE);
+no_dma_map:
+        free_pages((unsigned long) fa_sniffer->buffers[blk].block,
+            FA_BLOCK_SHIFT - PAGE_SHIFT);
+no_block:
+        ;
+    } while (blk > 0);
+    return rc;
+}
+
+
+static void release_fa_buffers(
+    struct pci_dev *pdev, struct fa_sniffer *fa_sniffer)
+{
+    int blk;
+    for (blk = 0; blk < FA_BUFFER_COUNT; blk++)
+    {
+        pci_unmap_single(pdev, fa_sniffer->buffers[blk].dma,
+            FA_BLOCK_SIZE, DMA_FROM_DEVICE);
+        free_pages((unsigned long) fa_sniffer->buffers[blk].block,
+            FA_BLOCK_SHIFT - PAGE_SHIFT);
+    }
+}
+
 
 /*****************************************************************************/
 /*                       Device and Module Initialisation                    */
@@ -609,7 +637,7 @@ static struct file_operations fa_sniffer_fops = {
 
 #define FA_SNIFFER_MAX_MINORS   32
 
-static struct class * fa_sniffer_class;
+static struct class *fa_sniffer_class;
 static unsigned int fa_sniffer_major;
 static unsigned long fa_sniffer_minors;  /* Bit mask of allocated minors */
 
@@ -738,12 +766,15 @@ static int __devinit fa_sniffer_probe(
     rc = initialise_fa_hw(pdev, &fa_sniffer->hw);
     if (rc < 0)     goto no_hw;
 
+    rc = allocate_fa_buffers(pdev, fa_sniffer);
+    if (rc < 0)     goto no_buffers;
+
     cdev_init(&fa_sniffer->cdev, &fa_sniffer_fops);
     fa_sniffer->cdev.owner = THIS_MODULE;
     rc = cdev_add(&fa_sniffer->cdev, MKDEV(fa_sniffer_major, minor), 1);
     TEST_RC(rc, no_cdev, "Unable to register device");
 
-    struct device * dev = device_create(
+    struct device *dev = device_create(
         fa_sniffer_class, &pdev->dev,
         MKDEV(fa_sniffer_major, minor),
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,27)
@@ -773,6 +804,8 @@ no_attr:
 no_device:
     cdev_del(&fa_sniffer->cdev);
 no_cdev:
+    release_fa_buffers(pdev, fa_sniffer);
+no_buffers:
     release_fa_hw(pdev, fa_sniffer->hw);
 no_hw:
     kfree(fa_sniffer);
@@ -795,6 +828,7 @@ static void __devexit fa_sniffer_remove(struct pci_dev *pdev)
         device_remove_file(&pdev->dev, &attributes[i]);
     device_destroy(fa_sniffer_class, fa_sniffer->cdev.dev);
     cdev_del(&fa_sniffer->cdev);
+    release_fa_buffers(pdev, fa_sniffer);
     release_fa_hw(pdev, fa_sniffer->hw);
     kfree(fa_sniffer);
     fa_sniffer_disable(pdev);
