@@ -27,6 +27,14 @@ MODULE_DESCRIPTION("Driver for PCIe Fast Acquisition Sniffer");
 MODULE_LICENSE("GPL");
 MODULE_VERSION("1.2");
 
+/* Module parameters. */
+#define MIN_FA_BUFFER_COUNT     3
+static int fa_block_shift = 19;     // Size of FA block buffer as power of 2
+static int fa_buffer_count = 4;     // Number of FA block buffers
+
+module_param(fa_block_shift,  int, S_IRUGO);
+module_param(fa_buffer_count, int, S_IRUGO);
+
 
 
 /* If test is true then do on_error, print message and goto target. */
@@ -307,9 +315,7 @@ static int fa_hw_status(struct fa_sniffer_hw *hw)
 
 /* We specify the size of a single FA block as a power of 2 (because we're
  * going to allocate the block with __get_free_page(). */
-#define FA_BLOCK_SHIFT      19      // 2**19 = 512K
-#define FA_BLOCK_SIZE       (1 << FA_BLOCK_SHIFT)
-#define FA_BUFFER_COUNT     4
+#define FA_BLOCK_SIZE       (1 << fa_block_shift)
 #define FA_BLOCK_FRAMES     (FA_BLOCK_SIZE / FA_FRAME_SIZE)
 
 
@@ -333,7 +339,7 @@ struct fa_sniffer {
         void *block;
         dma_addr_t dma;
         enum fa_block_state state;
-    } buffers[FA_BUFFER_COUNT];
+    } buffers[];
 };
 
 struct fa_sniffer_open {
@@ -357,8 +363,8 @@ struct fa_sniffer_open {
 static inline int step_index(int ix, int step)
 {
     ix += step;
-    if (ix >= FA_BUFFER_COUNT)
-        ix -= FA_BUFFER_COUNT;
+    if (ix >= fa_buffer_count)
+        ix -= fa_buffer_count;
     return ix;
 }
 
@@ -457,7 +463,7 @@ static int fa_sniffer_open(struct inode *inode, struct file *file)
     fa_sniffer->buffers[0].state = fa_block_dma;
     fa_sniffer->buffers[1].state = fa_block_dma;
     int i;
-    for (i = 2; i < FA_BUFFER_COUNT; i ++)
+    for (i = 2; i < fa_buffer_count; i ++)
         fa_sniffer->buffers[i].state = fa_block_free;
 
     prepare_dma(fa_sniffer->hw, FA_BLOCK_FRAMES);
@@ -565,13 +571,13 @@ static struct file_operations fa_sniffer_fops = {
 
 
 static int allocate_fa_buffers(
-    struct pci_dev *pdev,struct fa_sniffer *fa_sniffer)
+    struct pci_dev *pdev, struct fa_sniffer *fa_sniffer)
 {
     int rc;
 
     /* Prepare the circular buffer. */
     int blk;
-    for (blk = 0; blk < FA_BUFFER_COUNT; blk++)
+    for (blk = 0; blk < fa_buffer_count; blk++)
     {
         struct fa_block *block = &fa_sniffer->buffers[blk];
         /* We ask for "cache cold" pages just to optimise things, as these pages
@@ -581,7 +587,7 @@ static int allocate_fa_buffers(
          *    Seems that this one returns 0 rather than an error pointer on
          * failure. */
         block->block = (void *) __get_free_pages(
-            GFP_KERNEL | __GFP_COLD, FA_BLOCK_SHIFT - PAGE_SHIFT);
+            GFP_KERNEL | __GFP_COLD, fa_block_shift - PAGE_SHIFT);
         TEST_((unsigned long) block->block == 0, rc = -ENOMEM,
             no_block, "Unable to allocate buffer");
 
@@ -609,7 +615,7 @@ static int allocate_fa_buffers(
             FA_BLOCK_SIZE, DMA_FROM_DEVICE);
 no_dma_map:
         free_pages((unsigned long) fa_sniffer->buffers[blk].block,
-            FA_BLOCK_SHIFT - PAGE_SHIFT);
+            fa_block_shift - PAGE_SHIFT);
 no_block:
         ;
     } while (blk > 0);
@@ -621,12 +627,12 @@ static void release_fa_buffers(
     struct pci_dev *pdev, struct fa_sniffer *fa_sniffer)
 {
     int blk;
-    for (blk = 0; blk < FA_BUFFER_COUNT; blk++)
+    for (blk = 0; blk < fa_buffer_count; blk++)
     {
         pci_unmap_single(pdev, fa_sniffer->buffers[blk].dma,
             FA_BLOCK_SIZE, DMA_FROM_DEVICE);
         free_pages((unsigned long) fa_sniffer->buffers[blk].block,
-            FA_BLOCK_SHIFT - PAGE_SHIFT);
+            fa_block_shift - PAGE_SHIFT);
     }
 }
 
@@ -755,7 +761,9 @@ static int __devinit fa_sniffer_probe(
     rc = fa_sniffer_enable(pdev);
     if (rc < 0)     goto no_sniffer;
 
-    struct fa_sniffer *fa_sniffer = kmalloc(sizeof(*fa_sniffer), GFP_KERNEL);
+    struct fa_sniffer *fa_sniffer = kmalloc(
+        sizeof(*fa_sniffer) + fa_buffer_count * sizeof(struct fa_block),
+        GFP_KERNEL);
     TEST_PTR(rc, fa_sniffer, no_memory, "Unable to allocate memory");
 
     fa_sniffer->open_flag = 0;
@@ -856,6 +864,12 @@ static struct pci_driver fa_sniffer_driver = {
 static int __init fa_sniffer_init(void)
 {
     int rc = 0;
+    /* First validate the module parameters. */
+    TEST_(fa_block_shift < PAGE_SHIFT, rc = -EINVAL, bad_param,
+        "fa_block_shift too small");
+    TEST_(fa_buffer_count < MIN_FA_BUFFER_COUNT, rc = -EINVAL, bad_param,
+        "fa_buffer_count too small");
+
     fa_sniffer_class = class_create(THIS_MODULE, "fa_sniffer");
     TEST_PTR(rc, fa_sniffer_class, no_class, "Unable to create class");
 
@@ -875,6 +889,7 @@ no_driver:
 no_chrdev:
     class_destroy(fa_sniffer_class);
 no_class:
+bad_param:
     return rc;
 }
 
