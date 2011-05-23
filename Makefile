@@ -4,6 +4,9 @@ kernelsrc = /lib/modules/$(kernelver)/build
 
 default: $(KBUILD_DIR)/fa_sniffer.ko
 
+# Device version.  Advance on each release.
+VERSION = 1.3
+
 
 KFILES = Kbuild fa_sniffer.c fa_sniffer.h
 
@@ -12,7 +15,7 @@ $(KBUILD_DIR):
 	$(foreach file,$(KFILES), ln -s ../$(file) $(KBUILD_DIR);)
 
 $(KBUILD_DIR)/fa_sniffer.ko: fa_sniffer.c $(KBUILD_DIR)
-	make -C $(kernelsrc) M=$(KBUILD_DIR) modules
+	make -C $(kernelsrc) M=$(KBUILD_DIR) VERSION=$(VERSION) modules
 
 NOTES.html: NOTES
 	asciidoc $^
@@ -36,12 +39,18 @@ insmod: $(KBUILD_DIR)/fa_sniffer.ko
 rmmod:
 	sudo /sbin/rmmod fa_sniffer.ko
 
-rpm:
+rpmbuild:
+	mkdir rpmbuild
+
+rpmbuild/%: % rpmbuild
+	sed 's/@VERSION@/$(VERSION)/' $< >$@
+
+rpm: rpmbuild/fa_sniffer.spec rpmbuild/dkms.conf
 	mkdir -p rpmbuild/RPMS rpmbuild/BUILD
 	rpmbuild -bb \
 	    --define "_topdir $(CURDIR)/rpmbuild" \
             --define "_sourcedir $(CURDIR)" \
             --define '_tmppath %{_topdir}/BUILD' \
-            fa_sniffer.spec
+            rpmbuild/fa_sniffer.spec
 
 .PHONY: test insmod rmmod rpm

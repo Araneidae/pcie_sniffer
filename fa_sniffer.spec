@@ -1,6 +1,6 @@
 Summary: PCI express FA sniffer driver
 Name: fa_sniffer
-Version: 1.2
+Version: @VERSION@
 Release: 1dkms
 License: GPL
 Group: System Environment/Kernel
@@ -25,7 +25,7 @@ mkdir -p %{buildroot}%{dkmsdir} %{buildroot}%{udevdir}
 install -m 0644 %{_sourcedir}/fa_sniffer.c        %{buildroot}%{dkmsdir}
 install -m 0644 %{_sourcedir}/Makefile            %{buildroot}%{dkmsdir}
 install -m 0644 %{_sourcedir}/Kbuild              %{buildroot}%{dkmsdir}
-install -m 0644 %{_sourcedir}/dkms.conf           %{buildroot}%{dkmsdir}
+install -m 0644 %{_sourcedir}/rpmbuild/dkms.conf  %{buildroot}%{dkmsdir}
 install -m 0644 %{_sourcedir}/11-fa_sniffer.rules %{buildroot}%{udevdir}
 
 %files

@@ -22,11 +22,13 @@
 
 #include "fa_sniffer.h"
 
+#define _S(x)   #x
+#define S(x)    _S(x)
 
 MODULE_AUTHOR("Michael Abbott, Diamond Light Source Ltd.");
 MODULE_DESCRIPTION("Driver for PCIe Fast Acquisition Sniffer");
 MODULE_LICENSE("GPL");
-MODULE_VERSION("1.2");
+MODULE_VERSION(S(VERSION));
 
 /* Module parameters. */
 #define MIN_FA_BUFFER_COUNT     3
