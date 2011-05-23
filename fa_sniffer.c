@@ -52,10 +52,10 @@ module_param(fa_buffer_count, int, S_IRUGO);
 #define TEST_RC(rc, target, message) \
     TEST_((rc) < 0, , target, message)
 
-/* If ptr indicates an error then assign an error code to rc, print message
- * and goto target. */
+/* If ptr indicates an error then assign the associated error code to rc, print
+ * message and goto target.  If ptr is in fact NULL we return -ENOMEM. */
 #define TEST_PTR(rc, ptr, target, message) \
-    TEST_(IS_ERR(ptr), rc = PTR_ERR(ptr), target, message)
+    TEST_(IS_ERR(ptr), rc = PTR_ERR(ptr)?:-ENOMEM, target, message)
 
 
 
