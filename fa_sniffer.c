@@ -540,7 +540,12 @@ static ssize_t fa_sniffer_read(
             block->state == fa_block_data  ||  open->stopped);
         if (rc < 0)
         {
-            copied = rc;        // Interrupted, return interrupt code
+            /* If the wait was interrupted and we just return -EINTR we will
+             * effectively lose all the data that's already been copied.  The
+             * best thing is to only return -EINTR if nothing's been copied so
+             * far. */
+            if (copied == 0)
+                copied = rc;    // Interrupted, return interrupt code
             break;
         }
         if (block->state != fa_block_data)
@@ -552,10 +557,14 @@ static ssize_t fa_sniffer_read(
         size_t read_offset = open->read_offset;
         size_t copy_count = FA_BLOCK_SIZE - read_offset;
         if (copy_count > count)  copy_count = count;
-        if (copy_to_user(buf,
-                (char *) block->block + read_offset, copy_count) != 0)
+        copy_count -= copy_to_user(
+            buf, (char *) block->block + read_offset, copy_count);
+        if (copy_count == 0)
         {
-            copied = -EFAULT;   // copy_to_user failed to complete
+            /* As for the interrupted case, if we want to avoid losing data we
+             * can't report failure unless we've copied nothing. */
+            if (copied == 0)
+                copied = -EFAULT;   // copy_to_user failed
             break;
         }
 
