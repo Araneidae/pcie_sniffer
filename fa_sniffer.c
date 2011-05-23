@@ -343,8 +343,14 @@ struct fa_sniffer {
 };
 
 struct fa_sniffer_open {
-    struct fa_sniffer *fa_sniffer;
-    wait_queue_head_t wait_queue;
+    struct fa_sniffer *fa_sniffer;  // Associated device data
+    wait_queue_head_t wait_queue;   // Communicates from ISR to read() method
+    /* Some notes on this mutex.  We only need to serialise access to the open
+     * as we only allow one open at a time to exist, this is enforced via the
+     * fa_sniffer:open_flag.  We still need to serialise access as the caller
+     * may be multi-threaded, and we need to protect the open() and ioctl()
+     * methods. */
+    struct mutex mutex;         // Serialises access to this open
 
     /* Device status.  There are two DMA buffers allocated to the device, one
      * currently being read, the next queued to be read.  We will be
@@ -442,7 +448,9 @@ static int fa_sniffer_open(struct inode *inode, struct file *file)
     struct pci_dev *pdev = fa_sniffer->pdev;
 
     if (test_and_set_bit(0, &fa_sniffer->open_flag))
-        /* No good, the device is already open. */
+        /* No good, the device is already open.  This approach (only one open on
+         * the device at a time) is practical enough and means we only need to
+         * protect the open itself against concurrent access. */
         return -EBUSY;
 
     int rc = 0;
@@ -451,6 +459,7 @@ static int fa_sniffer_open(struct inode *inode, struct file *file)
 
     init_waitqueue_head(&open->wait_queue);
     open->isr_block_index = 0;
+    mutex_init(&open->mutex);
     init_completion(&open->isr_done);
     open->stopped = false;
     open->read_block_index = 0;
@@ -481,6 +490,7 @@ static int fa_sniffer_open(struct inode *inode, struct file *file)
     return 0;
 
 no_irq:
+    mutex_destroy(&open->mutex);
     kfree(open);
 no_open:
     return rc;
@@ -501,6 +511,7 @@ static int fa_sniffer_release(struct inode *inode, struct file *file)
     wait_for_completion(&open->isr_done);
     free_irq(pdev->irq, open);
 
+    mutex_destroy(&open->mutex);
     kfree(open);
 
     /* Do this last to let somebody else use this device. */
@@ -513,7 +524,11 @@ static ssize_t fa_sniffer_read(
     struct file *file, char *buf, size_t count, loff_t *f_pos)
 {
     struct fa_sniffer_open *open = file->private_data;
-    size_t copied = 0;
+
+    ssize_t copied = mutex_lock_interruptible(&open->mutex);
+    if (copied != 0)
+        return copied;
+
     while (count > 0)
     {
         /* Wait for data to arrive in the current block.  We can be
@@ -524,9 +539,12 @@ static ssize_t fa_sniffer_read(
         int rc = wait_event_interruptible(open->wait_queue,
             block->state == fa_block_data  ||  open->stopped);
         if (rc < 0)
-            return rc;
+        {
+            copied = rc;        // Interrupted, return interrupt code
+            break;
+        }
         if (block->state != fa_block_data)
-            return -EIO;
+            break;              // Device stopped, return what's been copied
 
         /* Copy as much data as needed and available out of the current block,
          * and advance all our buffers and pointers. */
@@ -536,7 +554,10 @@ static ssize_t fa_sniffer_read(
         if (copy_count > count)  copy_count = count;
         if (copy_to_user(buf,
                 (char *) block->block + read_offset, copy_count) != 0)
-            return -EFAULT;
+        {
+            copied = -EFAULT;   // copy_to_user failed to complete
+            break;
+        }
 
         copied += copy_count;
         count -= copy_count;
@@ -553,6 +574,8 @@ static ssize_t fa_sniffer_read(
             block->state = fa_block_free;
         }
     }
+
+    mutex_unlock(&open->mutex);
     return copied;
 }
 
