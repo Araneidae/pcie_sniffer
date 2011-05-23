@@ -20,6 +20,7 @@
 #include <linux/interrupt.h>
 #include <linux/sched.h>
 
+#include "fa_sniffer.h"
 
 
 MODULE_AUTHOR("Michael Abbott, Diamond Light Source Ltd.");
@@ -61,11 +62,6 @@ module_param(fa_buffer_count, int, S_IRUGO);
 /*****************************************************************************/
 /*                      FA Sniffer Hardware Definitions                      */
 /*****************************************************************************/
-
-/* Each frame consists of 256 (X,Y) position pairs stored as a sequence of 256
- * X positions followed by 256 Y positions, each position being a 4 byte
- * integer. */
-#define FA_FRAME_SIZE   2048    // 256 * (X,Y), 4 bytes each
 
 
 /* Xilinx vendor id: currently just a Xilinx development card. */
@@ -217,6 +213,8 @@ static void set_dma_buffer(struct fa_sniffer_hw *hw, dma_addr_t buffer)
  * frames that will be captured into each DMA buffer. */
 static void prepare_dma(struct fa_sniffer_hw *hw, int frame_count)
 {
+    BUILD_BUG_ON(FA_FRAME_SIZE != 2048);    // Frame size determined by hardware
+
     // Memory Write TLP Count (for one frame), in bytes
     writel(FA_FRAME_SIZE / hw->tlp_size, &hw->regs->wdmatlpc);
     // Buffer length in terms of number of 2K frames
@@ -355,8 +353,9 @@ struct fa_sniffer_open {
     /* Device status.  There are two DMA buffers allocated to the device, one
      * currently being read, the next queued to be read.  We will be
      * interrupted when the current buffer is switched. */
-    int isr_block_index;        // Block currently being read into by DMA
     struct completion isr_done; // Completion of all interrupts
+    int isr_block_index;        // Block currently being read into by DMA
+    bool buffer_overrun;        // Set if buffer overrun has occurred
 
     /* Reader status. */
     bool stopped;               // Set by ISR, read by reader
@@ -386,8 +385,9 @@ static irqreturn_t fa_sniffer_isr(
     struct fa_sniffer_hw *hw = open->fa_sniffer->hw;
     struct pci_dev *pdev = open->fa_sniffer->pdev;
     int filled_ix = open->isr_block_index;
-
     int status = fa_hw_status(hw);
+
+    open->isr_block_index = step_index(filled_ix, 1);
     open->fa_sniffer->last_interrupt = status;
     if (status & FA_STATUS_DATA_OK)
     {
@@ -416,15 +416,17 @@ static irqreturn_t fa_sniffer_isr(
                 fresh_block->dma, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
             set_dma_buffer(hw, fresh_block->dma);
             fresh_block->state = fa_block_dma;
-            open->isr_block_index = step_index(filled_ix, 1);
         }
         else
+        {
             /* Whoops: the next buffer isn't free.  Never mind.  The hardware
              * will stop as soon as the current block is full and we'll get a
              * STOPPED interrupt.  Let the reader consume the current block
              * first. */
+            open->buffer_overrun = true;
             printk(KERN_DEBUG
                 "fa_sniffer: Data buffer overrun in IRQ (%08x)\n", status);
+        }
     }
     else
     {
@@ -438,6 +440,48 @@ static irqreturn_t fa_sniffer_isr(
     /* Wake up any pending reads. */
     wake_up_interruptible(&open->wait_queue);
     return IRQ_HANDLED;
+}
+
+
+/* Used to start or restart the sniffer.  The hardware must not be running and
+ * there must be no pending completion when this is called. */
+static void start_sniffer(struct fa_sniffer_open *open)
+{
+    /* Reset all the dynamic state. */
+    INIT_COMPLETION(open->isr_done);
+    open->isr_block_index = 0;
+    open->buffer_overrun = false;
+    open->stopped = false;
+    open->read_block_index = 0;
+    open->read_offset = 0;
+
+    /* Reset the circular buffer into a standard state.  The first two buffers
+     * will be handed straight to the hardware, mark the rest as free. */
+    struct fa_sniffer *fa_sniffer = open->fa_sniffer;
+    fa_sniffer->buffers[0].state = fa_block_dma;
+    fa_sniffer->buffers[1].state = fa_block_dma;
+    int i;
+    for (i = 2; i < fa_buffer_count; i ++)
+        fa_sniffer->buffers[i].state = fa_block_free;
+
+    /* Prepare the initial hardware DMA buffers and go! */
+    prepare_dma(fa_sniffer->hw, FA_BLOCK_FRAMES);
+    set_dma_buffer(fa_sniffer->hw, fa_sniffer->buffers[0].dma);
+    start_fa_hw(fa_sniffer->hw);
+    set_dma_buffer(fa_sniffer->hw, fa_sniffer->buffers[1].dma);
+}
+
+
+/* Ensures the sniffer is stopped. */
+static void stop_sniffer(struct fa_sniffer_open *open)
+{
+    struct fa_sniffer *fa_sniffer = open->fa_sniffer;
+    stop_fa_hw(fa_sniffer->hw);
+    /* This wait must not be interruptible, as associated pages cannot be
+     * safely released until the last ISR has been received. */
+    // Strictly speaking we ought to use a timed wait anyhow for resistance
+    // against hardware errors.  On the other hand that's a losing battle...
+    wait_for_completion(&open->isr_done);
 }
 
 
@@ -456,36 +500,21 @@ static int fa_sniffer_open(struct inode *inode, struct file *file)
     int rc = 0;
     struct fa_sniffer_open *open = kmalloc(sizeof(*open), GFP_KERNEL);
     TEST_PTR(rc, open, no_open, "Unable to allocate open structure");
-
-    init_waitqueue_head(&open->wait_queue);
-    open->isr_block_index = 0;
-    mutex_init(&open->mutex);
-    init_completion(&open->isr_done);
-    open->stopped = false;
-    open->read_block_index = 0;
-    open->read_offset = 0;
-    open->fa_sniffer = fa_sniffer;
     file->private_data = open;
 
-    /* Prepare the circular buffer.  The first two buffers will be handed
-     * straight to the hardware, mark the rest as free. */
-    fa_sniffer->buffers[0].state = fa_block_dma;
-    fa_sniffer->buffers[1].state = fa_block_dma;
-    int i;
-    for (i = 2; i < fa_buffer_count; i ++)
-        fa_sniffer->buffers[i].state = fa_block_free;
-
-    prepare_dma(fa_sniffer->hw, FA_BLOCK_FRAMES);
+    open->fa_sniffer = fa_sniffer;
+    init_waitqueue_head(&open->wait_queue);
+    mutex_init(&open->mutex);
+    init_completion(&open->isr_done);
+    /* The remaining state is initialised by start_sniffer(). */
 
     /* Set up the interrupt routine and start things off. */
     rc = request_irq(
         pdev->irq, fa_sniffer_isr, IRQF_SHARED, "fa_sniffer", open);
     TEST_RC(rc, no_irq, "Unable to request irq");
 
-    /* Prepare the initial hardware DMA buffers. */
-    set_dma_buffer(fa_sniffer->hw, fa_sniffer->buffers[0].dma);
-    start_fa_hw(fa_sniffer->hw);
-    set_dma_buffer(fa_sniffer->hw, fa_sniffer->buffers[1].dma);
+    /* Ready to go. */
+    start_sniffer(open);
 
     return 0;
 
@@ -499,16 +528,12 @@ no_open:
 
 static int fa_sniffer_release(struct inode *inode, struct file *file)
 {
-    struct fa_sniffer *fa_sniffer =
-        container_of(inode->i_cdev, struct fa_sniffer, cdev);
-    struct pci_dev *pdev = fa_sniffer->pdev;
     struct fa_sniffer_open *open = file->private_data;
+    struct fa_sniffer *fa_sniffer = open->fa_sniffer;
+    struct pci_dev *pdev = fa_sniffer->pdev;
 
-    stop_fa_hw(fa_sniffer->hw);
-    /* This wait must not be interruptible, as the pages below cannot be
-     * safely released until the last ISR has been received. */
-    // However, we ought to use a timed wait anyhow
-    wait_for_completion(&open->isr_done);
+    stop_sniffer(open);
+
     free_irq(pdev->irq, open);
 
     mutex_destroy(&open->mutex);
@@ -589,11 +614,100 @@ static ssize_t fa_sniffer_read(
 }
 
 
+/* Force a restart of the sniffer.  If it has stopped naturally it will resume,
+ * otherwise a hardware restart is forced. */
+static long restart_sniffer(struct fa_sniffer_open *open)
+{
+    stop_sniffer(open);
+    start_sniffer(open);
+    return 0;
+}
+
+
+/* Force a halt to the sniffer.  Debug use only. */
+static long halt_sniffer(struct fa_sniffer_open *open)
+{
+    //!!!!
+    /* Need to check with Isa whether it's safe to repeatedly call this. */
+    if (!open->stopped)
+        stop_fa_hw(open->fa_sniffer->hw);
+    return 0;
+}
+
+
+/* Used to compute an estimate of the number of buffered frames.  This is not to
+ * be relied on as we have to read isr_block_index, which belongs to the
+ * interrupt routine exclusively. */
+static int blocks_available(struct fa_sniffer_open *open)
+{
+    int blocks =
+        (open->read_block_index - open->isr_block_index) % fa_buffer_count;
+    /* If we've suffered a buffer overrun and blocks is zero it's entirely
+     * possible that actually *all* the blocks are available instead. */
+    enum fa_block_state read_state =
+        open->fa_sniffer->buffers[open->read_block_index].state;
+    if (blocks == 0  &&  open->buffer_overrun  &&  read_state == fa_block_data)
+        blocks = fa_buffer_count;
+    return blocks;
+}
+
+/* Interrogate detailed sniffer status. */
+static long read_fa_status(struct fa_sniffer_open *open, void *result)
+{
+    struct fa_status status;
+    struct fa_sniffer *fa_sniffer = open->fa_sniffer;
+
+    long linkstatus = readl(&fa_sniffer->hw->regs->linkstatus);
+    status.status = linkstatus & 3;
+    status.partner = (linkstatus >> 8) & 0x3FF;
+    status.last_interrupt = fa_sniffer->last_interrupt;
+    status.running = !open->stopped;
+    status.overrun = open->buffer_overrun;
+    status.available =
+        FA_BLOCK_SIZE * blocks_available(open) - open->read_offset;
+
+    if (copy_to_user(result, &status, sizeof(struct fa_status)) == 0)
+        return 0;
+    else
+        return -EFAULT;
+}
+
+
+static long fa_sniffer_ioctl(
+    struct file *file, unsigned int cmd, unsigned long arg)
+{
+    struct fa_sniffer_open *open = file->private_data;
+    long result = mutex_lock_interruptible(&open->mutex);
+    if (result != 0)
+        return result;
+
+    switch (cmd)
+    {
+        case FASNIF_IOC_RESTART:
+            result = restart_sniffer(open);
+            break;
+        case FASNIF_IOC_HALT:
+            result = halt_sniffer(open);
+            break;
+        case FASNIF_IOC_GET_STATUS:
+            result = read_fa_status(open, (void *) arg);
+            break;
+        default:
+            result = -ENOTTY;
+            break;
+    }
+
+    mutex_unlock(&open->mutex);
+    return result;
+}
+
+
 static struct file_operations fa_sniffer_fops = {
     .owner   = THIS_MODULE,
     .open    = fa_sniffer_open,
     .release = fa_sniffer_release,
-    .read    = fa_sniffer_read
+    .read    = fa_sniffer_read,
+    .unlocked_ioctl = fa_sniffer_ioctl,
 };
 
 

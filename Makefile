@@ -5,7 +5,7 @@ kernelsrc = /lib/modules/$(kernelver)/build
 default: $(KBUILD_DIR)/fa_sniffer.ko
 
 
-KFILES = Kbuild fa_sniffer.c
+KFILES = Kbuild fa_sniffer.c fa_sniffer.h
 
 $(KBUILD_DIR):
 	mkdir -p $(KBUILD_DIR)
