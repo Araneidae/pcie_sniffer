@@ -30,7 +30,7 @@ MODULE_VERSION("1.2");
 /* Module parameters. */
 #define MIN_FA_BUFFER_COUNT     3
 static int fa_block_shift = 19;     // Size of FA block buffer as power of 2
-static int fa_buffer_count = 4;     // Number of FA block buffers
+static int fa_buffer_count = 5;     // Number of FA block buffers
 
 module_param(fa_block_shift,  int, S_IRUGO);
 module_param(fa_buffer_count, int, S_IRUGO);
