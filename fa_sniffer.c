@@ -685,13 +685,16 @@ static long fa_sniffer_ioctl(
 
     switch (cmd)
     {
-        case FASNIF_IOC_RESTART:
+        case FASNIF_IOCTL_GET_VERSION:
+            result = FASNIF_IOCTL_VERSION;
+            break;
+        case FASNIF_IOCTL_RESTART:
             result = restart_sniffer(open);
             break;
-        case FASNIF_IOC_HALT:
+        case FASNIF_IOCTL_HALT:
             result = halt_sniffer(open);
             break;
-        case FASNIF_IOC_GET_STATUS:
+        case FASNIF_IOCTL_GET_STATUS:
             result = read_fa_status(open, (void *) arg);
             break;
         default:
