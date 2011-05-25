@@ -96,6 +96,9 @@ struct x5pcie_dma_registers {
     u32 ccfaicfgval;  /* Ox80 CC FAI configuration register */
     u32 wdmastatus;   /* 0x84 WDMA status register */
     u32 linkstatus;   /* 0x88 Link status register */
+    u32 frameerrcnt;  /* 0x8C Frame error count */
+    u32 softerrcnt;   /* 0x90 Soft error count */
+    u32 harderrcnt;   /* 0x94 Hard error count */
 };
 
 struct fa_sniffer_hw {
@@ -658,11 +661,15 @@ static long read_fa_status(struct fa_sniffer_open *open, void *result)
 {
     struct fa_status status;
     struct fa_sniffer *fa_sniffer = open->fa_sniffer;
+    struct x5pcie_dma_registers *regs = fa_sniffer->hw->regs;
 
-    long linkstatus = readl(&fa_sniffer->hw->regs->linkstatus);
+    long linkstatus = readl(&regs->linkstatus);
     status.status = linkstatus & 3;
     status.partner = (linkstatus >> 8) & 0x3FF;
     status.last_interrupt = fa_sniffer->last_interrupt;
+    status.frame_errors = readl(&regs->frameerrcnt);
+    status.soft_errors = readl(&regs->softerrcnt);
+    status.hard_errors = readl(&regs->harderrcnt);
     status.running = !open->stopped;
     status.overrun = open->buffer_overrun;
     status.available =
@@ -858,47 +865,43 @@ static void fa_sniffer_disable(struct pci_dev *pdev)
 }
 
 
+static inline struct fa_sniffer * get_fa_sniffer(struct device *dev)
+{
+    return pci_get_drvdata(container_of(dev, struct pci_dev, dev));
+}
+
+#define READ_REG(dev, reg)      (readl(&get_fa_sniffer(dev)->hw->regs->reg))
+
+#define DECLARE_ATTR(name, expr) \
+    static ssize_t name##_show( \
+        struct device *dev, struct device_attribute *attr, char *buf) \
+    { \
+        return sprintf(buf, "%d\n", (expr)); \
+    }
+
+DECLARE_ATTR(last_interrupt, get_fa_sniffer(dev)->last_interrupt)
+DECLARE_ATTR(link_status,    READ_REG(dev, linkstatus) & 3)
+DECLARE_ATTR(link_partner,   (READ_REG(dev, linkstatus) >> 8) & 0x3FF)
+DECLARE_ATTR(frame_errors,   READ_REG(dev, frameerrcnt))
+DECLARE_ATTR(soft_errors,    READ_REG(dev, softerrcnt))
+DECLARE_ATTR(hard_errors,    READ_REG(dev, harderrcnt))
+
 static ssize_t firmware_show(
     struct device *dev, struct device_attribute *attr, char *buf)
 {
-    struct pci_dev *pdev = container_of(dev, struct pci_dev, dev);
-    struct fa_sniffer *fa_sniffer = pci_get_drvdata(pdev);
-    int ver = readl(&fa_sniffer->hw->regs->dcsr);
+    int ver = READ_REG(dev, dcsr);
     return sprintf(buf, "v%d.%02x.%d\n",
         (ver >> 12) & 0xf, (ver >> 4) & 0xff, ver & 0xf);
 }
-
-static ssize_t last_interrupt_show(
-    struct device *dev, struct device_attribute *attr, char *buf)
-{
-    struct pci_dev *pdev = container_of(dev, struct pci_dev, dev);
-    struct fa_sniffer *fa_sniffer = pci_get_drvdata(pdev);
-    return sprintf(buf, "%d\n", fa_sniffer->last_interrupt);
-}
-
-static ssize_t link_status_show(
-    struct device *dev, struct device_attribute *attr, char *buf)
-{
-    struct pci_dev *pdev = container_of(dev, struct pci_dev, dev);
-    struct fa_sniffer *fa_sniffer = pci_get_drvdata(pdev);
-    return sprintf(buf, "%d\n", readl(&fa_sniffer->hw->regs->linkstatus) & 3);
-}
-
-static ssize_t link_partner_show(
-    struct device *dev, struct device_attribute *attr, char *buf)
-{
-    struct pci_dev *pdev = container_of(dev, struct pci_dev, dev);
-    struct fa_sniffer *fa_sniffer = pci_get_drvdata(pdev);
-    return sprintf(buf, "%d\n",
-        (readl(&fa_sniffer->hw->regs->linkstatus) >> 8) & 0x3FF);
-}
-
 
 static struct device_attribute attributes[] = {
     __ATTR_RO(firmware),
     __ATTR_RO(last_interrupt),
     __ATTR_RO(link_status),
     __ATTR_RO(link_partner),
+    __ATTR_RO(frame_errors),
+    __ATTR_RO(soft_errors),
+    __ATTR_RO(hard_errors),
 };
 
 

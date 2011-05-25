@@ -29,6 +29,9 @@ struct fa_status {
     int status;             // Hardware link status
     int partner;            // Associated link partner
     int last_interrupt;     // Status word from last interrupt
+    int frame_errors;       // Hardware counts of communication errors
+    int soft_errors;        //  accumulated since hardware initialised
+    int hard_errors;
     bool running;           // True if connection currently active
     bool overrun;           // True if a buffer overrun occurred
     size_t available;       // Number of bytes currently buffered
