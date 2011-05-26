@@ -23,6 +23,7 @@ relies on a dedicated FPGA card.
 rm -rf %{buildroot}
 mkdir -p %{buildroot}%{dkmsdir} %{buildroot}%{udevdir}
 install -m 0644 %{_sourcedir}/fa_sniffer.c        %{buildroot}%{dkmsdir}
+install -m 0644 %{_sourcedir}/fa_sniffer.h        %{buildroot}%{dkmsdir}
 install -m 0644 %{_sourcedir}/Makefile            %{buildroot}%{dkmsdir}
 install -m 0644 %{_sourcedir}/Kbuild              %{buildroot}%{dkmsdir}
 install -m 0644 %{_sourcedir}/rpmbuild/dkms.conf  %{buildroot}%{dkmsdir}
@@ -30,6 +31,7 @@ install -m 0644 %{_sourcedir}/11-fa_sniffer.rules %{buildroot}%{udevdir}
 
 %files
 %{dkmsdir}/fa_sniffer.c
+%{dkmsdir}/fa_sniffer.h
 %{dkmsdir}/Makefile
 %{dkmsdir}/Kbuild
 %{dkmsdir}/dkms.conf
