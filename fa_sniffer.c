@@ -876,7 +876,7 @@ static inline struct fa_sniffer * get_fa_sniffer(struct device *dev)
     static ssize_t name##_show( \
         struct device *dev, struct device_attribute *attr, char *buf) \
     { \
-        return sprintf(buf, "%d\n", (expr)); \
+        return sprintf(buf, "%u\n", (expr)); \
     }
 
 DECLARE_ATTR(last_interrupt, get_fa_sniffer(dev)->last_interrupt)
@@ -889,7 +889,7 @@ DECLARE_ATTR(hard_errors,    READ_REG(dev, harderrcnt))
 static ssize_t firmware_show(
     struct device *dev, struct device_attribute *attr, char *buf)
 {
-    int ver = READ_REG(dev, dcsr);
+    unsigned int ver = READ_REG(dev, dcsr);
     return sprintf(buf, "v%d.%02x.%d\n",
         (ver >> 12) & 0xf, (ver >> 4) & 0xff, ver & 0xf);
 }
