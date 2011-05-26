@@ -640,40 +640,23 @@ static long halt_sniffer(struct fa_sniffer_open *open)
 }
 
 
-/* Used to compute an estimate of the number of buffered frames.  This is not to
- * be relied on as we have to read isr_block_index, which belongs to the
- * interrupt routine exclusively. */
-static int blocks_available(struct fa_sniffer_open *open)
-{
-    int blocks =
-        (open->read_block_index - open->isr_block_index) % fa_buffer_count;
-    /* If we've suffered a buffer overrun and blocks is zero it's entirely
-     * possible that actually *all* the blocks are available instead. */
-    enum fa_block_state read_state =
-        open->fa_sniffer->buffers[open->read_block_index].state;
-    if (blocks == 0  &&  open->buffer_overrun  &&  read_state == fa_block_data)
-        blocks = fa_buffer_count;
-    return blocks;
-}
-
 /* Interrogate detailed sniffer status. */
 static long read_fa_status(struct fa_sniffer_open *open, void *result)
 {
-    struct fa_status status;
     struct fa_sniffer *fa_sniffer = open->fa_sniffer;
     struct x5pcie_dma_registers *regs = fa_sniffer->hw->regs;
 
     long linkstatus = readl(&regs->linkstatus);
-    status.status = linkstatus & 3;
-    status.partner = (linkstatus >> 8) & 0x3FF;
-    status.last_interrupt = fa_sniffer->last_interrupt;
-    status.frame_errors = readl(&regs->frameerrcnt);
-    status.soft_errors = readl(&regs->softerrcnt);
-    status.hard_errors = readl(&regs->harderrcnt);
-    status.running = !open->stopped;
-    status.overrun = open->buffer_overrun;
-    status.available =
-        FA_BLOCK_SIZE * blocks_available(open) - open->read_offset;
+    struct fa_status status = {
+        .status = linkstatus & 3,
+        .partner = (linkstatus >> 8) & 0x3FF,
+        .last_interrupt = fa_sniffer->last_interrupt,
+        .frame_errors = readl(&regs->frameerrcnt),
+        .soft_errors = readl(&regs->softerrcnt),
+        .hard_errors = readl(&regs->harderrcnt),
+        .running = !open->stopped,
+        .overrun = open->buffer_overrun,
+    };
 
     if (copy_to_user(result, &status, sizeof(struct fa_status)) == 0)
         return 0;

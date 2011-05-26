@@ -14,7 +14,7 @@ $(KBUILD_DIR):
 	mkdir -p $(KBUILD_DIR)
 	$(foreach file,$(KFILES), ln -s ../$(file) $(KBUILD_DIR);)
 
-$(KBUILD_DIR)/fa_sniffer.ko: fa_sniffer.c $(KBUILD_DIR)
+$(KBUILD_DIR)/fa_sniffer.ko: fa_sniffer.c fa_sniffer.h $(KBUILD_DIR)
 	make -C $(kernelsrc) M=$(KBUILD_DIR) VERSION=$(VERSION) modules
 
 NOTES.html: NOTES
