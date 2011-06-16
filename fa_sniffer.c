@@ -377,52 +377,57 @@ static inline int step_index(int ix, int step)
 }
 
 
-/* This ISR maintains the invariant that the two blocks at isr_block_index and
- * directly after are fa_block_dma and all the rest are either data or free. */
-static irqreturn_t fa_sniffer_isr(
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,19)
-    int irq, void *dev_id)
-#else
-    int irq, void *dev_id, struct pt_regs *pt_regs)
-#endif
+/* Advances one block around the buffer, making the newly filled block available
+ * for readout and setting the next block up for DMA.  If the interrupt status
+ * reports that we're stopped we don't pass the next block through to the
+ * device, but it's still marked for DMA to maintain the buffer invariant (two
+ * blocks directly after isr_block_index are DMA). */
+static void advance_fa_buffer(
+    struct fa_sniffer_open *open, int status, struct fa_block *fresh_block)
 {
-    struct fa_sniffer_open *open = dev_id;
     struct fa_sniffer_hw *hw = open->fa_sniffer->hw;
     struct pci_dev *pdev = open->fa_sniffer->pdev;
     int filled_ix = open->isr_block_index;
-    int status = fa_hw_status(hw);
+    struct fa_block *filled_block = &open->fa_sniffer->buffers[filled_ix];
 
+    pci_dma_sync_single_for_cpu(pdev,
+        filled_block->dma, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
+    smp_wmb();  // Guards DMA transfer for block we've just read
+    filled_block->state = fa_block_data;
+
+    smp_rmb();  // Guards copy_to_user for free block.
+    if ((status & FA_STATUS_STOPPED) == 0)
+    {
+        /* Alas on our target system (2.6.18) this function seems to do
+         * nothing whatsoever.  Hopefully we'll have a working
+         * implementation one day... */
+        pci_dma_sync_single_for_device(pdev,
+            fresh_block->dma, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
+        set_dma_buffer(hw, fresh_block->dma);
+    }
+    fresh_block->state = fa_block_dma;
+    open->isr_block_index = step_index(filled_ix, 1);
+}
+
+
+/* This ISR maintains the invariant that the two blocks at isr_block_index and
+ * directly after are fa_block_dma and all the rest are either data or free. */
+static irqreturn_t fa_sniffer_isr(int irq, void *dev_id
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,19)
+    , struct pt_regs *pt_regs
+#endif
+    )
+{
+    struct fa_sniffer_open *open = dev_id;
+
+    int status = fa_hw_status(open->fa_sniffer->hw);
     open->fa_sniffer->last_interrupt = status;
     if (status & FA_STATUS_DATA_OK)
     {
         struct fa_block *fresh_block =
-            &open->fa_sniffer->buffers[step_index(filled_ix, 2)];
+            &open->fa_sniffer->buffers[step_index(open->isr_block_index, 2)];
         if (fresh_block->state == fa_block_free)
-        {
-            /* Good.  We have data and there's room in the circular buffer to
-             * proceed.  Pass the new buffer back to the user and set up the
-             * next DMA buffer, unless we've stopped -- but we still allocate
-             * the new buffer to keep the buffer invariant. */
-            struct fa_block *filled_block =
-                &open->fa_sniffer->buffers[filled_ix];
-            pci_dma_sync_single_for_cpu(pdev,
-                filled_block->dma, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
-            smp_wmb();  // Guards DMA transfer for block we've just read
-            filled_block->state = fa_block_data;
-
-            smp_rmb();  // Guards copy_to_user for free block.
-            if ((status & FA_STATUS_STOPPED) == 0)
-            {
-                /* Alas on our target system (2.6.18) this function seems to do
-                 * nothing whatsoever.  Hopefully we'll have a working
-                 * implementation one day... */
-                pci_dma_sync_single_for_device(pdev,
-                    fresh_block->dma, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
-                set_dma_buffer(hw, fresh_block->dma);
-            }
-            fresh_block->state = fa_block_dma;
-            open->isr_block_index = step_index(filled_ix, 1);
-        }
+            advance_fa_buffer(open, status, fresh_block);
         else
         {
             /* Whoops: the next buffer isn't free.  Never mind.  The hardware
