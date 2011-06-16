@@ -264,13 +264,14 @@ static void stop_fa_hw(struct fa_sniffer_hw *hw)
 }
 
 /* Read status associated with latest interrupt.  Returns current frame count
- * in bottom byte, returns DMA transfer status in bits 3:0 thus:
- *  ...1    Buffer finished, new DMA in progress (normal condition)
- *  000.    DMA still in progress
- *  xxx.    DMA halted, reason code one of:
- *      1    No valid DMA address
+ * together with the DMA transfer status in bits 3:0 thus:
+ *  ...1    Last data transfer was complete, transfer count is zero
+ *  ...0    Last data transfer incomplete, transfer count in top three bytes
+ *  000.    DMA still in progress, expect another interrupt
+ *  xxx.    DMA halted, no more interrupts will occur, reason code one of:
+ *      1    No valid DMA address (typically due to isr buffer overrun)
  *      2    Explicit user stop request
- *      4    Communication controller timed out
+ *      4    Communication controller timed out (no data available on network)
  *
  * The device guarantees that the last interrupt generated in response to a
  * sequence of DMA transfers will have a non zero STOPPED code and that this
@@ -348,12 +349,9 @@ struct fa_sniffer {
 struct fa_sniffer_open {
     struct fa_sniffer *fa_sniffer;  // Associated device data
     wait_queue_head_t wait_queue;   // Communicates from ISR to read() method
-    /* Some notes on this mutex.  We only need to serialise access to the open
-     * as we only allow one open at a time to exist, this is enforced via the
-     * fa_sniffer:open_flag.  We still need to serialise access as the caller
-     * may be multi-threaded, and we need to protect the open() and ioctl()
-     * methods. */
-    struct mutex mutex;         // Serialises access to this open
+    /* We only allow one read() call at a time.  This allows lock free handling
+     * which simplifies waiting considerably. */
+    unsigned long read_active;
 
     /* Device status.  There are two DMA buffers allocated to the device, one
      * currently being read, the next queued to be read.  We will be
@@ -363,7 +361,7 @@ struct fa_sniffer_open {
     bool buffer_overrun;        // Set if buffer overrun has occurred
 
     /* Reader status. */
-    bool stopped;               // Set by ISR, read by reader
+    bool running;               // Set by ISR, read by reader
     int read_block_index;       // Index of next block in buffers[] to read
     int read_offset;            // Offset into current block to read.
 };
@@ -379,6 +377,8 @@ static inline int step_index(int ix, int step)
 }
 
 
+/* This ISR maintains the invariant that the two blocks at isr_block_index and
+ * directly after are fa_block_dma and all the rest are either data or free. */
 static irqreturn_t fa_sniffer_isr(
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,19)
     int irq, void *dev_id)
@@ -392,35 +392,36 @@ static irqreturn_t fa_sniffer_isr(
     int filled_ix = open->isr_block_index;
     int status = fa_hw_status(hw);
 
-    open->isr_block_index = step_index(filled_ix, 1);
     open->fa_sniffer->last_interrupt = status;
     if (status & FA_STATUS_DATA_OK)
     {
-        /* Normal DMA complete interrupt, data in hand is ready: set up the
-         * next transfer and let the read know that there's data to read. */
-        struct fa_block *filled_block = &open->fa_sniffer->buffers[filled_ix];
-        pci_dma_sync_single_for_cpu(pdev,
-            filled_block->dma, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
-        smp_wmb();  // Guards DMA transfer for block we've just read
-        filled_block->state = fa_block_data;
-    }
-
-    if ((status & FA_STATUS_STOPPED) == 0)
-    {
-        /* DMA transfer still in progress.  Set up a new DMA buffer. */
-        int fresh_ix = step_index(filled_ix, 2);
-        struct fa_block *fresh_block = &open->fa_sniffer->buffers[fresh_ix];
-
+        struct fa_block *fresh_block =
+            &open->fa_sniffer->buffers[step_index(filled_ix, 2)];
         if (fresh_block->state == fa_block_free)
         {
+            /* Good.  We have data and there's room in the circular buffer to
+             * proceed.  Pass the new buffer back to the user and set up the
+             * next DMA buffer, unless we've stopped -- but we still allocate
+             * the new buffer to keep the buffer invariant. */
+            struct fa_block *filled_block =
+                &open->fa_sniffer->buffers[filled_ix];
+            pci_dma_sync_single_for_cpu(pdev,
+                filled_block->dma, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
+            smp_wmb();  // Guards DMA transfer for block we've just read
+            filled_block->state = fa_block_data;
+
             smp_rmb();  // Guards copy_to_user for free block.
-            /* Alas on our target system (2.6.18) this function seems to do
-             * nothing whatsoever.  Hopefully we'll have a working
-             * implementation one day... */
-            pci_dma_sync_single_for_device(pdev,
-                fresh_block->dma, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
-            set_dma_buffer(hw, fresh_block->dma);
+            if ((status & FA_STATUS_STOPPED) == 0)
+            {
+                /* Alas on our target system (2.6.18) this function seems to do
+                 * nothing whatsoever.  Hopefully we'll have a working
+                 * implementation one day... */
+                pci_dma_sync_single_for_device(pdev,
+                    fresh_block->dma, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
+                set_dma_buffer(hw, fresh_block->dma);
+            }
             fresh_block->state = fa_block_dma;
+            open->isr_block_index = step_index(filled_ix, 1);
         }
         else
         {
@@ -433,12 +434,13 @@ static irqreturn_t fa_sniffer_isr(
                 "fa_sniffer: Data buffer overrun in IRQ (%08x)\n", status);
         }
     }
-    else
+
+    if (status & FA_STATUS_STOPPED)
     {
-        /* This is the last interrupt.  Let the reader know that there's
-         * nothing more coming, and let fa_sniffer_release() know that DMA is
-         * over and clean up can complete. */
-        open->stopped = true;
+        /* This is the last interrupt.  Let the reader know that there's nothing
+         * more coming, and let stop_sniffer() know that DMA is over and clean
+         * up can complete. */
+        open->running = false;
         complete(&open->isr_done);
     }
 
@@ -454,26 +456,20 @@ static void start_sniffer(struct fa_sniffer_open *open)
 {
     /* Reset all the dynamic state. */
     INIT_COMPLETION(open->isr_done);
-    open->isr_block_index = 0;
     open->buffer_overrun = false;
-    open->stopped = false;
-    open->read_block_index = 0;
-    open->read_offset = 0;
+    open->running = true;
 
-    /* Reset the circular buffer into a standard state.  The first two buffers
-     * will be handed straight to the hardware, mark the rest as free. */
+    /* Prepare two buffers for dma.  We use the current isr index so that this
+     * can be done concurrently with read.  There is an invariant that the two
+     * blocks pointed to by isr_block_index are in state fa_block_dma.  We now
+     * just send these buffers to the hardware and go! */
     struct fa_sniffer *fa_sniffer = open->fa_sniffer;
-    fa_sniffer->buffers[0].state = fa_block_dma;
-    fa_sniffer->buffers[1].state = fa_block_dma;
-    int i;
-    for (i = 2; i < fa_buffer_count; i ++)
-        fa_sniffer->buffers[i].state = fa_block_free;
-
-    /* Prepare the initial hardware DMA buffers and go! */
+    int ix0 = open->isr_block_index;
+    int ix1 = step_index(ix0, 1);
     prepare_dma(fa_sniffer->hw, FA_BLOCK_FRAMES);
-    set_dma_buffer(fa_sniffer->hw, fa_sniffer->buffers[0].dma);
+    set_dma_buffer(fa_sniffer->hw, fa_sniffer->buffers[ix0].dma);
     start_fa_hw(fa_sniffer->hw);
-    set_dma_buffer(fa_sniffer->hw, fa_sniffer->buffers[1].dma);
+    set_dma_buffer(fa_sniffer->hw, fa_sniffer->buffers[ix1].dma);
 }
 
 
@@ -509,8 +505,17 @@ static int fa_sniffer_open(struct inode *inode, struct file *file)
 
     open->fa_sniffer = fa_sniffer;
     init_waitqueue_head(&open->wait_queue);
-    mutex_init(&open->mutex);
+    open->read_active = 0;
     init_completion(&open->isr_done);
+    /* Initial state for ISR -> read() communication. */
+    open->isr_block_index = 0;
+    open->read_block_index = 0;
+    open->read_offset = 0;
+    int i;
+    fa_sniffer->buffers[0].state = fa_block_dma;
+    fa_sniffer->buffers[1].state = fa_block_dma;
+    for (i = 2; i < fa_buffer_count; i ++)
+        fa_sniffer->buffers[i].state = fa_block_free;
     /* The remaining state is initialised by start_sniffer(). */
 
     /* Set up the interrupt routine and start things off. */
@@ -524,7 +529,6 @@ static int fa_sniffer_open(struct inode *inode, struct file *file)
     return 0;
 
 no_irq:
-    mutex_destroy(&open->mutex);
     kfree(open);
 no_open:
     return rc;
@@ -541,7 +545,6 @@ static int fa_sniffer_release(struct inode *inode, struct file *file)
 
     free_irq(pdev->irq, open);
 
-    mutex_destroy(&open->mutex);
     kfree(open);
 
     /* Do this last to let somebody else use this device. */
@@ -555,10 +558,11 @@ static ssize_t fa_sniffer_read(
 {
     struct fa_sniffer_open *open = file->private_data;
 
-    ssize_t copied = mutex_lock_interruptible(&open->mutex);
-    if (copied != 0)
-        return copied;
+    /* Check we're the only reader at this time. */
+    if (test_and_set_bit(0, &open->read_active))
+        return -EBUSY;
 
+    ssize_t copied = 0;
     while (count > 0)
     {
         /* Wait for data to arrive in the current block.  We can be
@@ -567,7 +571,7 @@ static ssize_t fa_sniffer_read(
         struct fa_block *block =
             &open->fa_sniffer->buffers[open->read_block_index];
         int rc = wait_event_interruptible(open->wait_queue,
-            block->state == fa_block_data  ||  open->stopped);
+            block->state == fa_block_data  ||  !open->running);
         if (rc < 0)
         {
             /* If the wait was interrupted and we just return -EINTR we will
@@ -614,7 +618,7 @@ static ssize_t fa_sniffer_read(
         }
     }
 
-    mutex_unlock(&open->mutex);
+    test_and_clear_bit(0, &open->read_active);
     return copied;
 }
 
@@ -632,9 +636,8 @@ static long restart_sniffer(struct fa_sniffer_open *open)
 /* Force a halt to the sniffer.  Debug use only. */
 static long halt_sniffer(struct fa_sniffer_open *open)
 {
-    //!!!!
-    /* Need to check with Isa whether it's safe to repeatedly call this. */
-    if (!open->stopped)
+    /* Seem to be harmless to send this repeated. */
+    if (open->running)
         stop_fa_hw(open->fa_sniffer->hw);
     return 0;
 }
@@ -654,7 +657,7 @@ static long read_fa_status(struct fa_sniffer_open *open, void *result)
         .frame_errors = readl(&regs->frameerrcnt),
         .soft_errors = readl(&regs->softerrcnt),
         .hard_errors = readl(&regs->harderrcnt),
-        .running = !open->stopped,
+        .running = open->running,
         .overrun = open->buffer_overrun,
     };
 
@@ -669,31 +672,19 @@ static long fa_sniffer_ioctl(
     struct file *file, unsigned int cmd, unsigned long arg)
 {
     struct fa_sniffer_open *open = file->private_data;
-    long result = mutex_lock_interruptible(&open->mutex);
-    if (result != 0)
-        return result;
-
     switch (cmd)
     {
         case FASNIF_IOCTL_GET_VERSION:
-            result = FASNIF_IOCTL_VERSION;
-            break;
+            return FASNIF_IOCTL_VERSION;
         case FASNIF_IOCTL_RESTART:
-            result = restart_sniffer(open);
-            break;
+            return restart_sniffer(open);
         case FASNIF_IOCTL_HALT:
-            result = halt_sniffer(open);
-            break;
+            return halt_sniffer(open);
         case FASNIF_IOCTL_GET_STATUS:
-            result = read_fa_status(open, (void *) arg);
-            break;
+            return read_fa_status(open, (void *) arg);
         default:
-            result = -ENOTTY;
-            break;
+            return -ENOTTY;
     }
-
-    mutex_unlock(&open->mutex);
-    return result;
 }
 
 
