@@ -30,9 +30,6 @@ SIZE=4096
 COUNT=1
 FILE=myfile.bin
 
-test: $(KBUILD_DIR)/fa_sniffer.ko
-	./runtest bs=$(SIZE) count=$(COUNT) >$(FILE)
-
 insmod: $(KBUILD_DIR)/fa_sniffer.ko
 	sudo /sbin/insmod $^
 
@@ -53,4 +50,4 @@ rpm: rpmbuild/fa_sniffer.spec rpmbuild/dkms.conf
             --define '_tmppath %{_topdir}/BUILD' \
             rpmbuild/fa_sniffer.spec
 
-.PHONY: test insmod rmmod rpm
+.PHONY: insmod rmmod rpm

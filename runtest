@@ -1,9 +1,0 @@
-#!/bin/sh
-
-cd "$(dirname "$0")"
-
-trap 'sudo /sbin/rmmod kbuild/fa_sniffer.ko' EXIT
-if sudo /sbin/insmod kbuild/fa_sniffer.ko; then
-    sleep 0.1   # Allow device time to install itself!
-    dd if=/dev/fa_sniffer0 "$@"
-fi
