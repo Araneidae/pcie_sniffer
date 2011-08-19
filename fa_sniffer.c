@@ -510,8 +510,7 @@ static void stop_sniffer(struct fa_sniffer_open *open)
     /* This wait must not be interruptible, as associated pages cannot be
      * safely released until the last ISR has been received.  If we've not had a
      * response within a second then I guess we're not getting one... */
-    wait_for_completion_timeout(&open->isr_done, HZ);
-    if (!open->isr_done.done)
+    if (wait_for_completion_timeout(&open->isr_done, HZ) == 0)
     {
         /* Oh dear, we are in real trouble.  The completion interrupt never
          * happened, which means we've no idea what the hardware is up to any
