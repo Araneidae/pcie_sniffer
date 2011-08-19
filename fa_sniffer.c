@@ -508,10 +508,18 @@ static void stop_sniffer(struct fa_sniffer_open *open)
     struct fa_sniffer *fa_sniffer = open->fa_sniffer;
     stop_fa_hw(fa_sniffer->hw);
     /* This wait must not be interruptible, as associated pages cannot be
-     * safely released until the last ISR has been received. */
-    // Strictly speaking we ought to use a timed wait anyhow for resistance
-    // against hardware errors.  On the other hand that's a losing battle...
-    wait_for_completion(&open->isr_done);
+     * safely released until the last ISR has been received.  If we've not had a
+     * response within a second then I guess we're not getting one... */
+    wait_for_completion_timeout(&open->isr_done, HZ);
+    if (!open->isr_done.done)
+    {
+        /* Oh dear, we are in real trouble.  The completion interrupt never
+         * happened, which means we've no idea what the hardware is up to any
+         * more.  All we can do is log a panicy report. */
+        printk(KERN_EMERG "The FA sniffer completion interrupt was not seen\n");
+        printk(KERN_EMERG "Kernel consistency is now unpredictable\n");
+        printk(KERN_EMERG "Reboot the system as a matter of urgency\n");
+    }
 }
 
 
@@ -599,9 +607,17 @@ static ssize_t fa_sniffer_read(
          * to either buffer overrun or communication controller timeout. */
         struct fa_block *block =
             &open->fa_sniffer->buffers[open->read_block_index];
-        int rc = wait_event_interruptible(open->wait_queue,
-            block->state == fa_block_data  ||  !open->running);
-        if (rc < 0)
+        int rc = wait_event_interruptible_timeout(open->wait_queue,
+            block->state == fa_block_data  ||  !open->running, HZ);
+        if (rc == 0)
+        {
+            /* Oh crap, we timed out.  This is not good, not good at all.
+             * Basically means the hardware is upset, or something else equally
+             * bad is going on. */
+            printk(KERN_ALERT "fa_sniffer read timed out.\n");
+            copied = -EIO;      // Could be ETIME, but something is badly wrong
+        }
+        else if (rc < 0)
         {
             /* If the wait was interrupted and we just return -EINTR we will
              * effectively lose all the data that's already been copied.  The
