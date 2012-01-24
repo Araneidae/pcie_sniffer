@@ -590,7 +590,7 @@ static int fa_sniffer_release(struct inode *inode, struct file *file)
 
 
 static ssize_t fa_sniffer_read(
-    struct file *file, char *buf, size_t count, loff_t *f_pos)
+    struct file *file, char __user *buf, size_t count, loff_t *f_pos)
 {
     struct fa_sniffer_open *open = file->private_data;
 
@@ -688,7 +688,7 @@ static long halt_sniffer(struct fa_sniffer_open *open)
 
 
 /* Interrogate detailed sniffer status. */
-static long read_fa_status(struct fa_sniffer_open *open, void *result)
+static long read_fa_status(struct fa_sniffer_open *open, void __user *result)
 {
     struct fa_sniffer *fa_sniffer = open->fa_sniffer;
     struct x5pcie_dma_registers *regs = fa_sniffer->hw->regs;
@@ -725,7 +725,7 @@ static long fa_sniffer_ioctl(
         case FASNIF_IOCTL_HALT:
             return halt_sniffer(open);
         case FASNIF_IOCTL_GET_STATUS:
-            return read_fa_status(open, (void *) arg);
+            return read_fa_status(open, (void __user *) arg);
         default:
             return -ENOTTY;
     }
@@ -738,6 +738,7 @@ static struct file_operations fa_sniffer_fops = {
     .release = fa_sniffer_release,
     .read    = fa_sniffer_read,
     .unlocked_ioctl = fa_sniffer_ioctl,
+    .compat_ioctl = fa_sniffer_ioctl,
 };
 
 

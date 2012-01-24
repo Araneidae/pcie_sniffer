@@ -53,12 +53,12 @@ struct fa_row { struct fa_entry row[FA_ENTRY_COUNT]; };
 
 /* Interrogates detailed status of FA sniffer. */
 struct fa_status {
-    unsigned int status;            // Hardware link status
-    unsigned int partner;           // Associated link partner
-    unsigned int last_interrupt;    // Status word from last interrupt
-    unsigned int frame_errors;      // Hardware counts of communication errors
-    unsigned int soft_errors;       //  accumulated since hardware initialised
-    unsigned int hard_errors;
+    uint32_t status;                // Hardware link status
+    uint32_t partner;               // Associated link partner
+    uint32_t last_interrupt;        // Status word from last interrupt
+    uint32_t frame_errors;          // Hardware counts of communication errors
+    uint32_t soft_errors;           //  accumulated since hardware initialised
+    uint32_t hard_errors;
     bool running;                   // True if connection currently active
     bool overrun;                   // True if a buffer overrun occurred
 };
