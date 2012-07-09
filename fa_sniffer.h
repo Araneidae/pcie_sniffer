@@ -59,9 +59,9 @@ struct fa_status {
     uint32_t frame_errors;          // Hardware counts of communication errors
     uint32_t soft_errors;           //  accumulated since hardware initialised
     uint32_t hard_errors;
-    bool running;                   // True if connection currently active
-    bool overrun;                   // True if a buffer overrun occurred
-};
+    uint8_t running;                // True if connection currently active
+    uint8_t overrun;                // True if a buffer overrun occurred
+} __attribute__((packed));
 #define FASNIF_IOCTL_GET_STATUS     _IOR('R', 1, struct fa_status)
 
 /* Retrieve timestamp associated with last read.  If reside is non zero then the
@@ -70,5 +70,5 @@ struct fa_status {
 struct fa_timestamp {
     uint64_t timestamp;             // Block completion timestamp
     uint32_t residue;               // Residue of block not read
-};
+} __attribute__((packed));
 #define FASNIF_IOCTL_GET_TIMESTAMP  _IOR('R', 2, struct fa_timestamp)
