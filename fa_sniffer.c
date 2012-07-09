@@ -59,9 +59,11 @@ MODULE_VERSION(S(VERSION));
 #define MIN_FA_BUFFER_COUNT     3
 static int fa_block_shift = 19;     // Size of FA block buffer as power of 2
 static int fa_buffer_count = 5;     // Number of FA block buffers
+static int fa_entry_count = 256;    // Default transfer size
 
 module_param(fa_block_shift,  int, S_IRUGO);
 module_param(fa_buffer_count, int, S_IRUGO);
+module_param(fa_entry_count, int, S_IRUGO);
 
 
 
@@ -82,6 +84,11 @@ module_param(fa_buffer_count, int, S_IRUGO);
 #define TEST_PTR(rc, ptr, target, message) \
     TEST_(IS_ERR(ptr), rc = PTR_ERR(ptr)?:-ENOMEM, target, message)
 
+
+
+/* We specify the size of a single FA block as a power of 2 (because we're
+ * going to allocate the block with __get_free_page(). */
+#define FA_BLOCK_SIZE       (1 << fa_block_shift)
 
 
 
@@ -241,14 +248,14 @@ static void set_dma_buffer(struct fa_sniffer_hw *hw, dma_addr_t buffer)
 
 /* Prepares FA Sniffer card to perform DMA.  frame_count is the number of CC
  * frames that will be captured into each DMA buffer. */
-static void prepare_dma(struct fa_sniffer_hw *hw, int frame_count)
+static void prepare_dma(struct fa_sniffer_hw *hw, int fa_entry_count)
 {
-    BUILD_BUG_ON(FA_FRAME_SIZE != 2048);    // Frame size determined by hardware
+    int fa_frame_size = fa_entry_count * FA_ENTRY_SIZE;
 
     // Memory Write TLP Count (for one frame), in bytes
-    writel(FA_FRAME_SIZE / hw->tlp_size, &hw->regs->wdmatlpc);
-    // Buffer length in terms of number of 2K frames
-    writel(frame_count, &hw->regs->wdmatlpp);
+    writel(fa_frame_size / hw->tlp_size, &hw->regs->wdmatlpc);
+    // Buffer length in terms of number of frames
+    writel(FA_BLOCK_SIZE / fa_frame_size, &hw->regs->wdmatlpp);
 
     // Assert Initiator Reset
     writel(1, &hw->regs->dcsr);
@@ -342,12 +349,6 @@ static int fa_hw_status(struct fa_sniffer_hw *hw)
  *  +-------+
  */
 
-/* We specify the size of a single FA block as a power of 2 (because we're
- * going to allocate the block with __get_free_page(). */
-#define FA_BLOCK_SIZE       (1 << fa_block_shift)
-#define FA_BLOCK_FRAMES     (FA_BLOCK_SIZE / FA_FRAME_SIZE)
-
-
 enum fa_block_state {
     fa_block_free,      // Not in use
     fa_block_dma,       // Allocated to DMA
@@ -362,6 +363,7 @@ struct fa_sniffer {
     struct fa_sniffer_hw *hw;   // Hardware resources
     unsigned long open_flag;    // Interlock: only one open at a time!
     int last_interrupt;         // Status word from last interrupt
+    int fa_entry_count;         // FA entries in one DMA transfer
 
     /* Circular buffer for interface from DMA to userspace read. */
     struct fa_block {
@@ -506,7 +508,7 @@ static void start_sniffer(struct fa_sniffer_open *open)
     struct fa_sniffer *fa_sniffer = open->fa_sniffer;
     int ix0 = open->isr_block_index;
     int ix1 = step_index(ix0, 1);
-    prepare_dma(fa_sniffer->hw, FA_BLOCK_FRAMES);
+    prepare_dma(fa_sniffer->hw, fa_sniffer->fa_entry_count);
     set_dma_buffer(fa_sniffer->hw, fa_sniffer->buffers[ix0].dma);
     start_fa_hw(fa_sniffer->hw);
     set_dma_buffer(fa_sniffer->hw, fa_sniffer->buffers[ix1].dma);
@@ -740,6 +742,31 @@ static long read_fa_timestamp(struct fa_sniffer_open *open, void __user *result)
 }
 
 
+static long set_fa_entry_count(struct fa_sniffer_open *open, void __user *value)
+{
+    uint32_t new_count;
+    if (copy_from_user(&new_count, value, sizeof(uint32_t)) == 0)
+    {
+        switch (new_count)
+        {
+            case 256:
+            case 512:
+            case 1024:
+                printk(KERN_INFO "fa_sniffing: setting fa_entry_count %u\n",
+                    new_count);
+                open->fa_sniffer->fa_entry_count = new_count;
+                return 0;
+            default:
+                printk(KERN_ERR "fa_sniffer: invalid fa_entry_count %u\n",
+                    new_count);
+                return -EINVAL;
+        }
+    }
+    else
+        return -EFAULT;
+}
+
+
 static long fa_sniffer_ioctl(
     struct file *file, unsigned int cmd, unsigned long arg)
 {
@@ -756,6 +783,10 @@ static long fa_sniffer_ioctl(
             return read_fa_status(open, (void __user *) arg);
         case FASNIF_IOCTL_GET_TIMESTAMP:
             return read_fa_timestamp(open, (void __user *) arg);
+        case FASNIF_IOCTL_GET_ENTRY_COUNT:
+            return open->fa_sniffer->fa_entry_count;
+        case FASNIF_IOCTL_SET_ENTRY_COUNT:
+            return set_fa_entry_count(open, (void __user *) arg);
         default:
             return -ENOTTY;
     }
@@ -949,6 +980,13 @@ static ssize_t api_version_show(
     return sprintf(buf, "%d\n", FASNIF_IOCTL_VERSION);
 }
 
+static ssize_t fa_entry_count_show(
+    struct device *dev, struct device_attribute *attr, char *buf)
+{
+    struct fa_sniffer *fa_sniffer = get_fa_sniffer(dev);
+    return sprintf(buf, "%d\n", fa_sniffer->fa_entry_count);
+}
+
 static struct device_attribute attributes[] = {
     __ATTR_RO(firmware),
     __ATTR_RO(last_interrupt),
@@ -958,6 +996,7 @@ static struct device_attribute attributes[] = {
     __ATTR_RO(soft_errors),
     __ATTR_RO(hard_errors),
     __ATTR_RO(api_version),
+    __ATTR_RO(fa_entry_count),
 };
 
 
@@ -979,6 +1018,7 @@ static int __devinit fa_sniffer_probe(
     fa_sniffer->open_flag = 0;
     fa_sniffer->pdev = pdev;
     fa_sniffer->last_interrupt = 0;
+    fa_sniffer->fa_entry_count = fa_entry_count;
     pci_set_drvdata(pdev, fa_sniffer);
 
     rc = initialise_fa_hw(pdev, &fa_sniffer->hw);

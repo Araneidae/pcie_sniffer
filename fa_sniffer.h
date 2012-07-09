@@ -29,14 +29,16 @@
 
 struct fa_entry { int32_t x, y; };
 
-/* Each frame consists of 256 (X,Y) position pairs stored in sequence, making a
- * total of 2048 bytes for a single FA frame. */
+/* Each frame consists of fa_entry_count (X,Y) position pairs stored in
+ * sequence, making a total of 2048/4096/8192 bytes for a single FA frame
+ * depending on the configured value of fa_entry_count (can be 256/512/1024). */
 #define FA_ENTRY_SIZE   (sizeof(struct fa_entry))
-#define FA_ENTRY_COUNT  256
-#define FA_FRAME_SIZE   (FA_ENTRY_COUNT * FA_ENTRY_SIZE)
 
-/* Type for an entire row representing a single FA frame. */
-struct fa_row { struct fa_entry row[FA_ENTRY_COUNT]; };
+#define MAX_FA_ENTRY_COUNT          1024    // 10 bit FA ID in protocol
+
+/* Type for an entire row representing a single FA frame.  Actual size will
+ * depend on configuration. */
+struct fa_row { struct fa_entry row[0]; };
 
 
 /* ioctl definitions. */
@@ -72,3 +74,9 @@ struct fa_timestamp {
     uint32_t residue;               // Residue of block not read
 } __attribute__((packed));
 #define FASNIF_IOCTL_GET_TIMESTAMP  _IOR('R', 2, struct fa_timestamp)
+
+/* Interrogates the current fa_entry_count. */
+#define FASNIF_IOCTL_GET_ENTRY_COUNT _IO('R', 3)
+/* Sets the fa_entry_count.  Note that the device will need to be closed and
+ * reopened for the change to take effect. */
+#define FASNIF_IOCTL_SET_ENTRY_COUNT _IOW('C', 3, uint32_t)
