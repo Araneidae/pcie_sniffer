@@ -43,6 +43,7 @@
 #include <linux/uaccess.h>
 #include <linux/interrupt.h>
 #include <linux/sched.h>
+#include <linux/slab.h>
 
 #include "fa_sniffer.h"
 
