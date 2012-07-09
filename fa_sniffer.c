@@ -365,9 +365,10 @@ struct fa_sniffer {
 
     /* Circular buffer for interface from DMA to userspace read. */
     struct fa_block {
-        void *block;
-        dma_addr_t dma;
-        enum fa_block_state state;
+        void *block;            // Block address
+        dma_addr_t dma;         // Associated dma address
+        enum fa_block_state state;  // free / in dma / has data
+        uint64_t timestamp;     // Timestamp of completion
     } buffers[];
 };
 
@@ -389,6 +390,8 @@ struct fa_sniffer_open {
     bool running;               // Set by ISR, read by reader
     int read_block_index;       // Index of next block in buffers[] to read
     int read_offset;            // Offset into current block to read.
+    uint64_t timestamp;         // Timestamp of last block read
+    int residue;                // Bytes remaining in last block read
 };
 
 
@@ -408,13 +411,15 @@ static inline int step_index(int ix, int step)
  * device, but it's still marked for DMA to maintain the buffer invariant (two
  * blocks directly after isr_block_index are DMA). */
 static void advance_fa_buffer(
-    struct fa_sniffer_open *open, int status, struct fa_block *fresh_block)
+    struct fa_sniffer_open *open, int status,
+    struct timeval *tv, struct fa_block *fresh_block)
 {
     struct fa_sniffer_hw *hw = open->fa_sniffer->hw;
     struct pci_dev *pdev = open->fa_sniffer->pdev;
     int filled_ix = open->isr_block_index;
     struct fa_block *filled_block = &open->fa_sniffer->buffers[filled_ix];
 
+    filled_block->timestamp = (uint64_t) tv->tv_sec * 1000000 + tv->tv_usec;
     pci_dma_sync_single_for_cpu(pdev,
         filled_block->dma, FA_BLOCK_SIZE, DMA_FROM_DEVICE);
     smp_wmb();  // Guards DMA transfer for block we've just read
@@ -443,6 +448,11 @@ static irqreturn_t fa_sniffer_isr(int irq, void *dev_id
 #endif
     )
 {
+    /* Capture the interrupt time stamp as soon as possible so that it is
+     * consistent.  Costs us a memory barrier, so it goes... */
+    struct timeval tv;
+    do_gettimeofday(&tv);
+
     struct fa_sniffer_open *open = dev_id;
 
     int status = fa_hw_status(open->fa_sniffer->hw);
@@ -452,7 +462,7 @@ static irqreturn_t fa_sniffer_isr(int irq, void *dev_id
         struct fa_block *fresh_block =
             &open->fa_sniffer->buffers[step_index(open->isr_block_index, 2)];
         if (fresh_block->state == fa_block_free)
-            advance_fa_buffer(open, status, fresh_block);
+            advance_fa_buffer(open, status, &tv, fresh_block);
         else
         {
             /* Whoops: the next buffer isn't free.  Never mind.  The hardware
@@ -548,6 +558,8 @@ static int fa_sniffer_open(struct inode *inode, struct file *file)
     open->isr_block_index = 0;
     open->read_block_index = 0;
     open->read_offset = 0;
+    open->timestamp = 0;
+    open->residue = 0;
     int i;
     fa_sniffer->buffers[0].state = fa_block_dma;
     fa_sniffer->buffers[1].state = fa_block_dma;
@@ -654,6 +666,10 @@ static ssize_t fa_sniffer_read(
         buf += copy_count;
         open->read_offset += copy_count;
 
+        /* Record timestamp and residue of current read. */
+        open->timestamp = block->timestamp;
+        open->residue = FA_BLOCK_SIZE - open->read_offset;
+
         /* If the current block has been consumed then move on to the next
          * block, marking this block as free for the interrupt routine. */
         if (open->read_offset >= FA_BLOCK_SIZE)
@@ -690,6 +706,9 @@ static long halt_sniffer(struct fa_sniffer_open *open)
 }
 
 
+#define COPY_TO_USER(result, value) \
+    (copy_to_user(result, &(value), sizeof(value)) == 0 ? 0 : -EFAULT)
+
 /* Interrogate detailed sniffer status. */
 static long read_fa_status(struct fa_sniffer_open *open, void __user *result)
 {
@@ -707,11 +726,17 @@ static long read_fa_status(struct fa_sniffer_open *open, void __user *result)
         .running = open->running,
         .overrun = open->buffer_overrun,
     };
+    return COPY_TO_USER(result, status);
+}
 
-    if (copy_to_user(result, &status, sizeof(struct fa_status)) == 0)
-        return 0;
-    else
-        return -EFAULT;
+
+static long read_fa_timestamp(struct fa_sniffer_open *open, void __user *result)
+{
+    struct fa_timestamp timestamp = {
+        .timestamp = open->timestamp,
+        .residue   = open->residue
+    };
+    return COPY_TO_USER(result, timestamp);
 }
 
 
@@ -729,6 +754,8 @@ static long fa_sniffer_ioctl(
             return halt_sniffer(open);
         case FASNIF_IOCTL_GET_STATUS:
             return read_fa_status(open, (void __user *) arg);
+        case FASNIF_IOCTL_GET_TIMESTAMP:
+            return read_fa_timestamp(open, (void __user *) arg);
         default:
             return -ENOTTY;
     }
