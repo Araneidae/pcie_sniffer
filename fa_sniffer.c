@@ -568,6 +568,7 @@ static int fa_sniffer_open(struct inode *inode, struct file *file)
 no_irq:
     kfree(open);
 no_open:
+    test_and_clear_bit(0, &fa_sniffer->open_flag);
     return rc;
 }
 
@@ -616,6 +617,7 @@ static ssize_t fa_sniffer_read(
              * bad is going on. */
             printk(KERN_ALERT "fa_sniffer read timed out.\n");
             copied = -EIO;      // Could be ETIME, but something is badly wrong
+            break;
         }
         else if (rc < 0)
         {
