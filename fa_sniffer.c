@@ -916,6 +916,12 @@ static ssize_t firmware_show(
         (ver >> 12) & 0xf, (ver >> 4) & 0xff, ver & 0xf);
 }
 
+static ssize_t api_version_show(
+    struct device *dev, struct device_attribute *attr, char *buf)
+{
+    return sprintf(buf, "%d\n", FASNIF_IOCTL_VERSION);
+}
+
 static struct device_attribute attributes[] = {
     __ATTR_RO(firmware),
     __ATTR_RO(last_interrupt),
@@ -924,6 +930,7 @@ static struct device_attribute attributes[] = {
     __ATTR_RO(frame_errors),
     __ATTR_RO(soft_errors),
     __ATTR_RO(hard_errors),
+    __ATTR_RO(api_version),
 };
 
 
