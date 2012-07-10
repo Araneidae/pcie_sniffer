@@ -6,6 +6,9 @@ default: $(KBUILD_DIR)/fa_sniffer.ko
 
 # Device version.  Advance on each release.
 VERSION = 1.6
+RELEASE = 1dkms
+
+RPM_FILE = fa_sniffer-$(VERSION)-$(RELEASE).noarch.rpm
 
 
 KFILES = Kbuild fa_sniffer.c fa_sniffer.h
@@ -21,7 +24,7 @@ NOTES.html: NOTES
 	asciidoc $^
 
 clean:
-	rm -rf $(KBUILD_DIR) kbuild-* NOTES.html rpmbuild
+	rm -rf $(KBUILD_DIR) kbuild-* NOTES.html rpmbuild *.rpm
 
 .PHONY: clean default
 
@@ -39,8 +42,8 @@ rmmod:
 rpmbuild:
 	mkdir rpmbuild
 
-rpmbuild/%: % rpmbuild
-	sed 's/@VERSION@/$(VERSION)/' $< >$@
+rpmbuild/%: % rpmbuild Makefile
+	sed 's/@VERSION@/$(VERSION)/;s/@RELEASE@/$(RELEASE)/' $< >$@
 
 rpm: rpmbuild/fa_sniffer.spec rpmbuild/dkms.conf
 	mkdir -p rpmbuild/RPMS rpmbuild/BUILD
@@ -49,5 +52,6 @@ rpm: rpmbuild/fa_sniffer.spec rpmbuild/dkms.conf
             --define "_sourcedir $(CURDIR)" \
             --define '_tmppath %{_topdir}/BUILD' \
             rpmbuild/fa_sniffer.spec
+	ln -sf rpmbuild/RPMS/noarch/$(RPM_FILE) .
 
 .PHONY: insmod rmmod rpm

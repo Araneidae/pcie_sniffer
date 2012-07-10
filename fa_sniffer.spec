@@ -1,7 +1,7 @@
 Summary: PCI express FA sniffer driver
 Name: fa_sniffer
 Version: @VERSION@
-Release: 1dkms
+Release: @RELEASE@
 License: GPL
 Group: System Environment/Kernel
 BuildRoot: %{_tmppath}/%{name}-%{version}-root
