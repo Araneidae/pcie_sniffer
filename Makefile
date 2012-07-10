@@ -5,7 +5,7 @@ kernelsrc = /lib/modules/$(kernelver)/build
 default: $(KBUILD_DIR)/fa_sniffer.ko
 
 # Device version.  Advance on each release.
-VERSION = 1.6-pre
+VERSION = 1.6
 
 
 KFILES = Kbuild fa_sniffer.c fa_sniffer.h
