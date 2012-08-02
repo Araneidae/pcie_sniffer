@@ -238,7 +238,7 @@ static void set_dma_buffer(struct fa_sniffer_hw *hw, dma_addr_t buffer)
         ((hw->tlp_size / 4) & 0x1FFF);
     u32 bottom_word = (u32) buffer;
 
-    /* Ensure bottom word written befor top word, and serialise writes to help
+    /* Ensure bottom word written before top word, and serialise writes to help
      * with initialisation. */
     writel(bottom_word, &hw->regs->wdmatlpa);
     readl(&hw->regs->dcsr);
@@ -747,19 +747,22 @@ static long set_fa_entry_count(struct fa_sniffer_open *open, void __user *value)
     uint32_t new_count;
     if (copy_from_user(&new_count, value, sizeof(uint32_t)) == 0)
     {
-        switch (new_count)
+        /* New count must be a multiple of the TLP count and a power of 2. */
+        int tlp_size = open->fa_sniffer->hw->tlp_size;
+        if (0 < new_count  &&  new_count <= 1024  &&
+            (new_count & -new_count) == new_count  &&
+            (FA_ENTRY_SIZE * new_count) % tlp_size == 0)
         {
-            case 256:
-            case 512:
-            case 1024:
-                printk(KERN_INFO "fa_sniffing: setting fa_entry_count %u\n",
-                    new_count);
-                open->fa_sniffer->fa_entry_count = new_count;
-                return 0;
-            default:
-                printk(KERN_ERR "fa_sniffer: invalid fa_entry_count %u\n",
-                    new_count);
-                return -EINVAL;
+            printk(KERN_INFO "fa_sniffing: setting fa_entry_count %u\n",
+                new_count);
+            open->fa_sniffer->fa_entry_count = new_count;
+            return 0;
+        }
+        else
+        {
+            printk(KERN_ERR "fa_sniffer: invalid fa_entry_count %u (min %d)\n",
+                new_count, (int) (tlp_size / FA_ENTRY_SIZE));
+            return -EINVAL;
         }
     }
     else
