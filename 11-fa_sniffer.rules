@@ -1,7 +1,4 @@
-# Udev rule to allow fa_sniffer to be world readable
+# Udev rule to allow fa_sniffer to be world readable and to create geographic id
 # Copy this file to /etc/udev/rules.d
 
-SUBSYSTEM=="fa_sniffer", MODE="0444", OPTIONS="last_rule"
-
-# Extra rule to make /dev/sdb accessible
-# KERNEL=="sdb", OWNER="epics_user", GROUP="targetdev", MODE="0660", OPTIONS="last_rule"
+SUBSYSTEM=="fa_sniffer", MODE="0444", IMPORT="path_id %p", SYMLINK+="fa_sniffer/$env{ID_PATH}", OPTIONS="last_rule"
