@@ -5,7 +5,7 @@ kernelsrc = /lib/modules/$(kernelver)/build
 default: $(KBUILD_DIR)/fa_sniffer.ko
 
 # Device version.  Advance on each release.
-VERSION = 1.6
+VERSION = 1.7
 RELEASE = 1dkms
 
 RPM_FILE = fa_sniffer-$(VERSION)-$(RELEASE).noarch.rpm
