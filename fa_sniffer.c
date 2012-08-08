@@ -1,6 +1,6 @@
 /* Kernel driver for Communication Controller FA sniffer.
  *
- * Copyright (C) 2010  Michael Abbott, Diamond Light Source Ltd.
+ * Copyright (C) 2010-2012  Michael Abbott, Diamond Light Source Ltd.
  *
  * The FA sniffer driver is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as published by
@@ -165,7 +165,7 @@ static int DMAGetMaxPacketSize(struct x5pcie_dma_registers *regs)
 }
 
 /* Returns the requested block of bar registers. */
-static void * get_bar(struct pci_dev *dev, int bar, resource_size_t min_size)
+static void *get_bar(struct pci_dev *dev, int bar, resource_size_t min_size)
 {
     if (pci_resource_len(dev, bar) < min_size)
         return ERR_PTR(-EINVAL);
@@ -701,7 +701,7 @@ static long restart_sniffer(struct fa_sniffer_open *open)
 /* Force a halt to the sniffer.  Debug use only. */
 static long halt_sniffer(struct fa_sniffer_open *open)
 {
-    /* Seem to be harmless to send this repeated. */
+    /* Seem to be harmless to send this repeatedly. */
     if (open->running)
         stop_fa_hw(open->fa_sniffer->hw);
     return 0;
@@ -753,7 +753,7 @@ static long set_fa_entry_count(struct fa_sniffer_open *open, void __user *value)
             (new_count & -new_count) == new_count  &&
             (FA_ENTRY_SIZE * new_count) % tlp_size == 0)
         {
-            printk(KERN_INFO "fa_sniffing: setting fa_entry_count %u\n",
+            printk(KERN_INFO "fa_sniffer: setting fa_entry_count %u\n",
                 new_count);
             open->fa_sniffer->fa_entry_count = new_count;
             return 0;
@@ -879,6 +879,92 @@ static void release_fa_buffers(
 
 
 /*****************************************************************************/
+/*                              Sysfs Device Nodes                           */
+/*****************************************************************************/
+
+static inline struct fa_sniffer *get_fa_sniffer(struct device *dev)
+{
+    return pci_get_drvdata(container_of(dev, struct pci_dev, dev));
+}
+
+#define READ_REG(dev, reg)      (readl(&get_fa_sniffer(dev)->hw->regs->reg))
+
+#define DECLARE_ATTR(name, expr) \
+    static ssize_t name##_show( \
+        struct device *dev, struct device_attribute *attr, char *buf) \
+    { \
+        return sprintf(buf, "%u\n", (expr)); \
+    }
+
+DECLARE_ATTR(last_interrupt, get_fa_sniffer(dev)->last_interrupt)
+DECLARE_ATTR(link_status,    READ_REG(dev, linkstatus) & 3)
+DECLARE_ATTR(link_partner,   (READ_REG(dev, linkstatus) >> 8) & 0x3FF)
+DECLARE_ATTR(frame_errors,   READ_REG(dev, frameerrcnt))
+DECLARE_ATTR(soft_errors,    READ_REG(dev, softerrcnt))
+DECLARE_ATTR(hard_errors,    READ_REG(dev, harderrcnt))
+
+static ssize_t firmware_show(
+    struct device *dev, struct device_attribute *attr, char *buf)
+{
+    unsigned int ver = READ_REG(dev, dcsr);
+    return sprintf(buf, "v%d.%02x.%d\n",
+        (ver >> 12) & 0xf, (ver >> 4) & 0xff, ver & 0xf);
+}
+
+static ssize_t api_version_show(
+    struct device *dev, struct device_attribute *attr, char *buf)
+{
+    return sprintf(buf, "%d\n", FASNIF_IOCTL_VERSION);
+}
+
+static ssize_t fa_entry_count_show(
+    struct device *dev, struct device_attribute *attr, char *buf)
+{
+    struct fa_sniffer *fa_sniffer = get_fa_sniffer(dev);
+    return sprintf(buf, "%d\n", fa_sniffer->fa_entry_count);
+}
+
+static struct device_attribute attributes[] = {
+    __ATTR_RO(firmware),
+    __ATTR_RO(last_interrupt),
+    __ATTR_RO(link_status),
+    __ATTR_RO(link_partner),
+    __ATTR_RO(frame_errors),
+    __ATTR_RO(soft_errors),
+    __ATTR_RO(hard_errors),
+    __ATTR_RO(api_version),
+    __ATTR_RO(fa_entry_count),
+};
+
+
+static int fa_sysfs_create(struct pci_dev *pdev)
+{
+    int rc = 0, i;
+    for (i = 0; i < (int) ARRAY_SIZE(attributes); i ++)
+    {
+        rc = device_create_file(&pdev->dev, &attributes[i]);
+        TEST_RC(rc, no_attr, "Unable to create attr");
+    }
+    return 0;
+
+    do {
+        device_remove_file(&pdev->dev, &attributes[i]);
+no_attr:
+        i --;
+    } while (i >= 0);
+    return rc;
+}
+
+
+static void fa_sysfs_remove(struct pci_dev *pdev)
+{
+    unsigned i;
+    for (i = 0; i < ARRAY_SIZE(attributes); i ++)
+        device_remove_file(&pdev->dev, &attributes[i]);
+}
+
+
+/*****************************************************************************/
 /*                       Device and Module Initialisation                    */
 /*****************************************************************************/
 
@@ -948,61 +1034,6 @@ static void fa_sniffer_disable(struct pci_dev *pdev)
 }
 
 
-static inline struct fa_sniffer * get_fa_sniffer(struct device *dev)
-{
-    return pci_get_drvdata(container_of(dev, struct pci_dev, dev));
-}
-
-#define READ_REG(dev, reg)      (readl(&get_fa_sniffer(dev)->hw->regs->reg))
-
-#define DECLARE_ATTR(name, expr) \
-    static ssize_t name##_show( \
-        struct device *dev, struct device_attribute *attr, char *buf) \
-    { \
-        return sprintf(buf, "%u\n", (expr)); \
-    }
-
-DECLARE_ATTR(last_interrupt, get_fa_sniffer(dev)->last_interrupt)
-DECLARE_ATTR(link_status,    READ_REG(dev, linkstatus) & 3)
-DECLARE_ATTR(link_partner,   (READ_REG(dev, linkstatus) >> 8) & 0x3FF)
-DECLARE_ATTR(frame_errors,   READ_REG(dev, frameerrcnt))
-DECLARE_ATTR(soft_errors,    READ_REG(dev, softerrcnt))
-DECLARE_ATTR(hard_errors,    READ_REG(dev, harderrcnt))
-
-static ssize_t firmware_show(
-    struct device *dev, struct device_attribute *attr, char *buf)
-{
-    unsigned int ver = READ_REG(dev, dcsr);
-    return sprintf(buf, "v%d.%02x.%d\n",
-        (ver >> 12) & 0xf, (ver >> 4) & 0xff, ver & 0xf);
-}
-
-static ssize_t api_version_show(
-    struct device *dev, struct device_attribute *attr, char *buf)
-{
-    return sprintf(buf, "%d\n", FASNIF_IOCTL_VERSION);
-}
-
-static ssize_t fa_entry_count_show(
-    struct device *dev, struct device_attribute *attr, char *buf)
-{
-    struct fa_sniffer *fa_sniffer = get_fa_sniffer(dev);
-    return sprintf(buf, "%d\n", fa_sniffer->fa_entry_count);
-}
-
-static struct device_attribute attributes[] = {
-    __ATTR_RO(firmware),
-    __ATTR_RO(last_interrupt),
-    __ATTR_RO(link_status),
-    __ATTR_RO(link_partner),
-    __ATTR_RO(frame_errors),
-    __ATTR_RO(soft_errors),
-    __ATTR_RO(hard_errors),
-    __ATTR_RO(api_version),
-    __ATTR_RO(fa_entry_count),
-};
-
-
 static int __devinit fa_sniffer_probe(
     struct pci_dev *pdev, const struct pci_device_id *id)
 {
@@ -1044,23 +1075,13 @@ static int __devinit fa_sniffer_probe(
         "fa_sniffer%d", minor);
     TEST_PTR(rc, dev, no_device, "Unable to create device");
 
-    int i;
-    for (i = 0; i < (int) ARRAY_SIZE(attributes); i ++)
-    {
-        rc = device_create_file(&pdev->dev, &attributes[i]);
-        TEST_RC(rc, no_attr, "Unable to create attr");
-    }
+    rc = fa_sysfs_create(pdev);
+    if (rc < 0)     goto no_attr;
 
     printk(KERN_INFO "fa_sniffer%d installed\n", minor);
     return 0;
 
-
-    do {
-        device_remove_file(&pdev->dev, &attributes[i]);
 no_attr:
-        i --;
-    } while (i >= 0);
-
     device_destroy(fa_sniffer_class, MKDEV(fa_sniffer_major, minor));
 no_device:
     cdev_del(&fa_sniffer->cdev);
@@ -1084,9 +1105,7 @@ static void __devexit fa_sniffer_remove(struct pci_dev *pdev)
     struct fa_sniffer *fa_sniffer = pci_get_drvdata(pdev);
     unsigned int minor = MINOR(fa_sniffer->cdev.dev);
 
-    unsigned i;
-    for (i = 0; i < ARRAY_SIZE(attributes); i ++)
-        device_remove_file(&pdev->dev, &attributes[i]);
+    fa_sysfs_remove(pdev);
     device_destroy(fa_sniffer_class, fa_sniffer->cdev.dev);
     cdev_del(&fa_sniffer->cdev);
     release_fa_buffers(pdev, fa_sniffer);

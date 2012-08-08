@@ -1,6 +1,6 @@
 /* User space definitions for the fa_sniffer device driver.
  *
- * Copyright (C) 2010  Michael Abbott, Diamond Light Source Ltd.
+ * Copyright (C) 2010-2012  Michael Abbott, Diamond Light Source Ltd.
  *
  * The FA sniffer driver is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as published by
