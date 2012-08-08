@@ -1,36 +1,34 @@
+==========
 FA Sniffer
 ==========
+
+.. Written in reStructuredText
+.. default-role:: literal
 
 udev Configuration
 ------------------
 
-The following line works for udev in `/etc/udev/rules.d/10-local.rules`:
+The following line works for udev in `/etc/udev/rules.d/10-local.rules`::
 
-----
-SUBSYSTEM=="fa_sniffer", MODE="0444", OPTIONS="last_rule"
-----
+    SUBSYSTEM=="fa_sniffer", MODE="0444", OPTIONS="last_rule"
 
 For some reason we need to set `last_rule`, otherwise this rule doesn't get
 applied.
 
-See http://reactivated.net/writing_udev_rules.html[] for documentation on udev
+See http://reactivated.net/writing_udev_rules.html for documentation on udev
 rules.  Some useful programs noted there:
 
-`udevtest`:: 
-Given path to sysfs node ('without' the leading `/sys`) prints the udev rules
-that will be applied.  For example:
-+
-----
-udevtest /class/fa_sniffer/fa_sniffer0
-----
+`udevtest`
+    Given path to sysfs node ('without' the leading `/sys`) prints the udev
+    rules that will be applied.  For example::
 
-`udevinfo`::
-Walks sysfs tree printing information about the device as understood by udev.
-In this case the actual path must be passed.  For example:
-+
-----
-udevinfo -a -p /sys/class/fa_sniffer/fa_sniffer0
-----
+        udevtest /class/fa_sniffer/fa_sniffer0
+
+`udevinfo`
+    Walks sysfs tree printing information about the device as understood by
+    udev.  In this case the actual path must be passed.  For example::
+
+        udevinfo -a -p /sys/class/fa_sniffer/fa_sniffer0
 
 
 Device configuration with udev
@@ -39,11 +37,9 @@ Device configuration with udev
 The FA archiver tool runs best with direct output to a target block device.  For
 this to be successful the device needs to be writeable.  One solution is to
 ensure that the FA archiver runs as a member of a group, say `targetdev`, with
-the following line in `/etc/udev/rules.d/`:
+the following line in `/etc/udev/rules.d/`::
 
-----
-KERNEL=="sdb", GROUP="targetdev", MODE="0660", OPTIONS="last_rule"
-----
+    KERNEL=="sdb", GROUP="targetdev", MODE="0660", OPTIONS="last_rule"
 
 
 Installation using dkms
@@ -51,15 +47,13 @@ Installation using dkms
 
 To install on target system, let `$SOURCE` be the directory containing the
 fa_sniffer driver, then the following commands should be sufficient for a
-complete installation (on RHEL 5):
+complete installation (on RHEL 5)::
 
-----
-# cp $SOURCE/fa_sniffer.rules /etc/udev/rules.d
-# ln -fsn $SOURCE /usr/src/fa_sniffer-1.0
-# dkms add -m fa_sniffer -v 1.0
-# dkms build -m fa_sniffer -v 1.0
-# dkms install -m fa_sniffer -v 1.0
-----
+    # cp $SOURCE/fa_sniffer.rules /etc/udev/rules.d
+    # ln -fsn $SOURCE /usr/src/fa_sniffer-1.0
+    # dkms add -m fa_sniffer -v 1.0
+    # dkms build -m fa_sniffer -v 1.0
+    # dkms install -m fa_sniffer -v 1.0
 
 
 Using `rpmbuild`
@@ -68,7 +62,9 @@ Using `rpmbuild`
 Annoyingly difficult to find sensible documentation for `rpmbuild`.  Here are a
 variety of urls:
 
-http://reality.sgiweb.org/davea/rpmbuild.html[]
-http://www.ibm.com/developerworks/library/l-rpm1/[]
-http://www.rpm.org/max-rpm/index.html[]
-http://www.rpm.org/max-rpm-snapshot[]
+| http://reality.sgiweb.org/davea/rpmbuild.html
+| http://www.ibm.com/developerworks/library/l-rpm1/
+| http://www.rpm.org/max-rpm/index.html
+| http://www.rpm.org/max-rpm-snapshot
+
+.. vim: filetype=rst:
