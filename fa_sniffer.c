@@ -158,6 +158,8 @@ struct x5pcie_dma_registers {
     u32 frameerrcnt;  /* 0x8C Frame error count */
     u32 softerrcnt;   /* 0x90 Soft error count */
     u32 harderrcnt;   /* 0x94 Hard error count */
+    u32 nodeid;       /* 0x98 10-bit node ID */
+    u32 timeframelen; /* 0x9C 16-bit time frame length */
 };
 
 struct fa_sniffer_hw {
@@ -900,6 +902,11 @@ static long fa_sniffer_ioctl(
             return open->fa_sniffer->fa_entry_count;
         case FASNIF_IOCTL_SET_ENTRY_COUNT:
             return set_fa_entry_count(open, (void __user *) arg);
+        case FASNIF_IOCTL_GET_TIMEFRAME_LENGTH:
+            return readl(&open->fa_sniffer->hw->regs->timeframelen);
+        case FASNIF_IOCTL_SET_TIMEFRAME_LENGTH:
+            writel(arg, &open->fa_sniffer->hw->regs->timeframelen);
+            return 0;
         default:
             return -ENOTTY;
     }
@@ -1012,6 +1019,8 @@ DECLARE_ATTR(link_partner,   (READ_REG(dev, linkstatus) >> 8) & 0x3FF)
 DECLARE_ATTR(frame_errors,   READ_REG(dev, frameerrcnt))
 DECLARE_ATTR(soft_errors,    READ_REG(dev, softerrcnt))
 DECLARE_ATTR(hard_errors,    READ_REG(dev, harderrcnt))
+DECLARE_ATTR(node_id,        READ_REG(dev, nodeid))
+DECLARE_ATTR(timeframe_len,  READ_REG(dev, timeframelen))
 
 static ssize_t firmware_show(
     struct device *dev, struct device_attribute *attr, char *buf)
@@ -1034,6 +1043,38 @@ static ssize_t fa_entry_count_show(
     return sprintf(buf, "%d\n", fa_sniffer->fa_entry_count);
 }
 
+static int write_register(
+    struct device *dev, const char *buf, size_t count, size_t offset)
+{
+    unsigned long value;
+    int rc = strict_strtoul(buf, 10, &value);
+    if (rc == 0)
+    {
+        writel(value, (void *) get_fa_sniffer(dev)->hw->regs + offset);
+        return count;
+    }
+    else
+        return rc;
+}
+
+static ssize_t node_id_store(
+    struct device *dev, struct device_attribute *attr,
+    const char *buf, size_t count)
+{
+    return write_register(
+        dev, buf, count, offsetof(struct x5pcie_dma_registers, nodeid));
+}
+
+static ssize_t timeframe_len_store(
+    struct device *dev, struct device_attribute *attr,
+    const char *buf, size_t count)
+{
+    return write_register(
+        dev, buf, count, offsetof(struct x5pcie_dma_registers, timeframelen));
+}
+
+#define __ATTR_RW(name)     __ATTR(name, 0664, name##_show, name##_store)
+
 static struct device_attribute attributes[] = {
     __ATTR_RO(firmware),
     __ATTR_RO(last_interrupt),
@@ -1044,6 +1085,8 @@ static struct device_attribute attributes[] = {
     __ATTR_RO(hard_errors),
     __ATTR_RO(api_version),
     __ATTR_RO(fa_entry_count),
+    __ATTR_RW(node_id),
+    __ATTR_RW(timeframe_len),
 };
 
 

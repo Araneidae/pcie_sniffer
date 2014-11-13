@@ -80,3 +80,7 @@ struct fa_timestamp {
 /* Sets the fa_entry_count.  Note that the device will need to be closed and
  * reopened for the change to take effect. */
 #define FASNIF_IOCTL_SET_ENTRY_COUNT _IOW('C', 3, uint32_t)
+
+/* Read and set timeframe length.  Setting takes immediate effect. */
+#define FASNIF_IOCTL_GET_TIMEFRAME_LENGTH _IO('R', 4)
+#define FASNIF_IOCTL_SET_TIMEFRAME_LENGTH _IOW('C', 4, uint32_t)
