@@ -119,6 +119,15 @@ module_param(fa_entry_count, int, S_IRUGO);
 #define INT_CFG0_GPIO           15
 #define GPIO_INT_SRC            8
 
+/* CERN SPEC Bar 0 definitions. */
+#define LCLK_LOCKED             0x10000
+#define CLK_READ_SELECT         0x10004
+#define CLK_READ_VAL            0x10008
+
+/* Target clock frequency. */
+#define MIN_CC_CLK_TICKS        8700
+#define MAX_CC_CLK_TICKS        8706
+
 
 
 /* Register map for FA sniffer PCIe interface. */
@@ -157,8 +166,9 @@ struct fa_sniffer_hw {
     int tlp_size;   // Max length of single PCI DMA transfer (in bytes)
 };
 
-#define BAR0_LEN    1024
-#define BAR4_LEN    1024
+#define BAR0_LEN_XILINX 1024
+#define BAR0_LEN_SPEC   0x20000
+#define BAR4_LEN        1024
 
 
 static int code2size(int bCode)
@@ -184,6 +194,37 @@ static int DMAGetMaxPacketSize(struct x5pcie_dma_registers *regs)
         wMaxCapPayload : wMaxProgPayload;
 }
 
+static int get_spec_clocks(void *bar0)
+{
+    /* Check that the clock is locked. */
+    int status = readl(bar0 + LCLK_LOCKED);
+    if ((status & 1) == 0)
+    {
+        printk(KERN_ERR "Local clock not locked\n");
+        return -EIO;
+    }
+
+    /* Verify communication controller clock frequency. */
+    writel(0, bar0 + CLK_READ_SELECT);
+    int clock = readl(bar0 + CLK_READ_VAL);
+    if (clock < MIN_CC_CLK_TICKS || MAX_CC_CLK_TICKS < clock)
+    {
+        printk(KERN_ERR "CC clock out of range: %d\n", clock);
+        return -EIO;
+    }
+    return 0;
+}
+
+static int setup_spec_lclk(struct fa_sniffer_hw *hw)
+{
+    /* Set up GN4121 clock controller to set local clock to 100 MHz. */
+    writel(0xE001F07C, hw->bar4 + R_CLK_CSR);
+    /* Need to wait for clock to settle, two reads and prints are enough. */
+    printk(KERN_INFO "CLK_CSR = %08x\n", readl(hw->bar4+R_CLK_CSR));
+    printk(KERN_INFO "CLK_CSR = %08x\n", readl(hw->bar4+R_CLK_CSR));
+
+    return get_spec_clocks(hw->regs);
+}
 
 static void setup_spec_interrupts(void *bar4)
 {
@@ -212,24 +253,31 @@ static void *get_bar(struct pci_dev *dev, int bar, resource_size_t min_size)
 
 
 static int initialise_fa_hw(
-    struct pci_dev *pdev, struct fa_sniffer_hw **hw,
-    const struct pci_device_id *id)
+    struct pci_dev *pdev, struct fa_sniffer_hw **hw, bool is_spec_board)
 {
     int rc = 0;
     *hw = kmalloc(sizeof(*hw), GFP_KERNEL);
     TEST_PTR(rc, *hw, no_hw, "Cannot allocate fa hardware");
 
-    struct x5pcie_dma_registers *regs = get_bar(pdev, 0, BAR0_LEN);
+    struct x5pcie_dma_registers *regs =
+        get_bar(pdev, 0, is_spec_board ? BAR0_LEN_SPEC : BAR0_LEN_XILINX);
     TEST_PTR(rc, regs, no_bar, "Cannot find registers");
     (*hw)->regs = regs;
-    (*hw)->tlp_size = DMAGetMaxPacketSize(regs);
+    if (is_spec_board)
+        (*hw)->tlp_size = 128;
+    else
+        (*hw)->tlp_size = DMAGetMaxPacketSize(regs);
 
     /* Only pick up bar 4 registers from SPEC board. */
-    if (id->vendor == SPEC_VID  &&  id->device == SPEC_DID)
+    if (is_spec_board)
     {
         void *bar4 = get_bar(pdev, 4, BAR4_LEN);
         TEST_PTR(rc, bar4, no_bar4, "Cannot find bar 4");
         (*hw)->bar4 = bar4;
+
+        setup_spec_lclk(*hw);
+        rc = get_spec_clocks(regs);
+        if (rc < 0) goto clock_error;
 
         setup_spec_interrupts(bar4);
     }
@@ -248,6 +296,8 @@ static int initialise_fa_hw(
 
     return rc;
 
+clock_error:
+    pci_iounmap(pdev, (*hw)->bar4);
 no_bar4:
     pci_iounmap(pdev, (*hw)->regs);
 no_bar:
@@ -510,8 +560,14 @@ static irqreturn_t fa_sniffer_isr(int irq, void *dev_id
     do_gettimeofday(&tv);
 
     struct fa_sniffer_open *open = dev_id;
+    struct fa_sniffer_hw *hw = open->fa_sniffer->hw;
 
-    int status = fa_hw_status(open->fa_sniffer->hw);
+    /* Only on SPEC board we can get unexpected interrupts, so make sure there
+     * is a reason for this interrupt. */
+    if (readl(hw->bar4 + R_GPIO_INT_STATUS) == 0)
+        return IRQ_NONE;
+
+    int status = fa_hw_status(hw);
     open->fa_sniffer->last_interrupt = status;
     if (status & FA_STATUS_DATA_OK)
     {
@@ -1049,10 +1105,11 @@ static void release_minor(unsigned int minor)
 }
 
 
-static int fa_sniffer_enable(struct pci_dev *pdev)
+static int fa_sniffer_enable(struct pci_dev *pdev, bool is_spec_board)
 {
     int rc = pci_enable_device(pdev);
     TEST_RC(rc, no_device, "Unable to enable device");
+
     rc = pci_request_regions(pdev, "fa_sniffer");
     TEST_RC(rc, no_regions, "Unable to reserve resources");
 
@@ -1061,8 +1118,14 @@ static int fa_sniffer_enable(struct pci_dev *pdev)
 
     pci_set_master(pdev);
 
-    rc = pci_enable_msi(pdev);       // Enable message based interrupts
-    TEST_RC(rc, no_msi, "Unable to enable MSI");
+    /* For reasons beyond our understanding, if we call pci_enable_msi on the
+     * SPEC board things go horribly wrong: all the interrupts generate "no IRQ
+     * handler" messages. */
+    if (!is_spec_board)
+    {
+        rc = pci_enable_msi(pdev);       // Enable message based interrupts
+        TEST_RC(rc, no_msi, "Unable to enable MSI");
+    }
 
     return 0;
 
@@ -1077,9 +1140,10 @@ no_device:
     return rc;
 }
 
-static void fa_sniffer_disable(struct pci_dev *pdev)
+static void fa_sniffer_disable(struct pci_dev *pdev, bool is_spec_board)
 {
-    pci_disable_msi(pdev);
+    if (!is_spec_board)
+        pci_disable_msi(pdev);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,29)
     pci_clear_master(pdev);
 #endif
@@ -1095,7 +1159,8 @@ static int __devinit fa_sniffer_probe(
     int rc = get_free_minor(&minor);
     TEST_RC(rc, no_minor, "Unable to allocate minor device number");
 
-    rc = fa_sniffer_enable(pdev);
+    bool is_spec_board = id->vendor == SPEC_VID  &&  id->device == SPEC_DID;
+    rc = fa_sniffer_enable(pdev, is_spec_board);
     if (rc < 0)     goto no_sniffer;
 
     struct fa_sniffer *fa_sniffer = kmalloc(
@@ -1109,7 +1174,7 @@ static int __devinit fa_sniffer_probe(
     fa_sniffer->fa_entry_count = fa_entry_count;
     pci_set_drvdata(pdev, fa_sniffer);
 
-    rc = initialise_fa_hw(pdev, &fa_sniffer->hw, id);
+    rc = initialise_fa_hw(pdev, &fa_sniffer->hw, is_spec_board);
     if (rc < 0)     goto no_hw;
 
     rc = allocate_fa_buffers(pdev, fa_sniffer);
@@ -1146,7 +1211,7 @@ no_buffers:
 no_hw:
     kfree(fa_sniffer);
 no_memory:
-    fa_sniffer_disable(pdev);
+    fa_sniffer_disable(pdev, is_spec_board);
 no_sniffer:
     release_minor(minor);
 no_minor:
@@ -1158,6 +1223,7 @@ static void __devexit fa_sniffer_remove(struct pci_dev *pdev)
 {
     struct fa_sniffer *fa_sniffer = pci_get_drvdata(pdev);
     unsigned int minor = MINOR(fa_sniffer->cdev.dev);
+    bool is_spec_board = fa_sniffer->hw->bar4 != NULL;
 
     fa_sysfs_remove(pdev);
     device_destroy(fa_sniffer_class, fa_sniffer->cdev.dev);
@@ -1165,7 +1231,7 @@ static void __devexit fa_sniffer_remove(struct pci_dev *pdev)
     release_fa_buffers(pdev, fa_sniffer);
     release_fa_hw(pdev, fa_sniffer->hw);
     kfree(fa_sniffer);
-    fa_sniffer_disable(pdev);
+    fa_sniffer_disable(pdev, is_spec_board);
     release_minor(minor);
 
     printk(KERN_INFO "fa_sniffer%d removed\n", minor);
