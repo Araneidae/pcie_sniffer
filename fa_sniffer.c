@@ -101,6 +101,24 @@ module_param(fa_entry_count, int, S_IRUGO);
 /* Xilinx vendor id: currently just a Xilinx development card. */
 #define XILINX_VID      0x10EE
 #define XILINX_DID      0x0007
+/* CERN SPEC board. */
+#define SPEC_VID        0x10DC
+#define SPEC_DID        0x018D
+
+
+/* CERN SPEC Bar 4 definitions. */
+#define GN4124_BAR              0x4
+#define R_CLK_CSR               0x808
+#define R_INT_CFG0              0x820
+#define R_GPIO_DIR_MODE         0xA04
+#define R_GPIO_INT_MASK_CLR     0xA18
+#define R_GPIO_INT_MASK_SET     0xA1C
+#define R_GPIO_INT_STATUS       0xA20
+#define R_GPIO_INT_VALUE        0xA28
+#define CLK_CSR_DIVOT_MASK      0x3F0
+#define INT_CFG0_GPIO           15
+#define GPIO_INT_SRC            8
+
 
 
 /* Register map for FA sniffer PCIe interface. */
@@ -135,10 +153,12 @@ struct x5pcie_dma_registers {
 
 struct fa_sniffer_hw {
     struct x5pcie_dma_registers *regs;
+    void *bar4;         // Only present on CERN SPEC board
     int tlp_size;   // Max length of single PCI DMA transfer (in bytes)
 };
 
 #define BAR0_LEN    1024
+#define BAR4_LEN    1024
 
 
 static int code2size(int bCode)
@@ -164,6 +184,22 @@ static int DMAGetMaxPacketSize(struct x5pcie_dma_registers *regs)
         wMaxCapPayload : wMaxProgPayload;
 }
 
+
+static void setup_spec_interrupts(void *bar4)
+{
+    // Set interrupt line from FPGA (GPIO8) as input
+    writel(1<<GPIO_INT_SRC, bar4 + R_GPIO_DIR_MODE);
+    // Set interrupt mask for all GPIO except for GPIO8
+    writel(~(1<<GPIO_INT_SRC), bar4 + R_GPIO_INT_MASK_SET);
+    // Make sure the interrupt mask is cleared for GPIO8
+    writel(1<<GPIO_INT_SRC, bar4 + R_GPIO_INT_MASK_CLR);
+    // Interrupt on rising edge of GPIO8
+    writel(1<<GPIO_INT_SRC, bar4 + R_GPIO_INT_VALUE);
+    // GPIO as interrupt 0 source
+    writel(1<<INT_CFG0_GPIO, bar4 + R_INT_CFG0);
+}
+
+
 /* Returns the requested block of bar registers. */
 static void *get_bar(struct pci_dev *dev, int bar, resource_size_t min_size)
 {
@@ -175,7 +211,9 @@ static void *get_bar(struct pci_dev *dev, int bar, resource_size_t min_size)
 
 
 
-static int initialise_fa_hw(struct pci_dev *pdev, struct fa_sniffer_hw **hw)
+static int initialise_fa_hw(
+    struct pci_dev *pdev, struct fa_sniffer_hw **hw,
+    const struct pci_device_id *id)
 {
     int rc = 0;
     *hw = kmalloc(sizeof(*hw), GFP_KERNEL);
@@ -185,6 +223,18 @@ static int initialise_fa_hw(struct pci_dev *pdev, struct fa_sniffer_hw **hw)
     TEST_PTR(rc, regs, no_bar, "Cannot find registers");
     (*hw)->regs = regs;
     (*hw)->tlp_size = DMAGetMaxPacketSize(regs);
+
+    /* Only pick up bar 4 registers from SPEC board. */
+    if (id->vendor == SPEC_VID  &&  id->device == SPEC_DID)
+    {
+        void *bar4 = get_bar(pdev, 4, BAR4_LEN);
+        TEST_PTR(rc, bar4, no_bar4, "Cannot find bar 4");
+        (*hw)->bar4 = bar4;
+
+        setup_spec_interrupts(bar4);
+    }
+    else
+        (*hw)->bar4 = NULL;
 
     int ver = readl(&regs->dcsr);
     printk(KERN_INFO "FA sniffer firmware v%d.%02x.%d\n",
@@ -198,6 +248,8 @@ static int initialise_fa_hw(struct pci_dev *pdev, struct fa_sniffer_hw **hw)
 
     return rc;
 
+no_bar4:
+    pci_iounmap(pdev, (*hw)->regs);
 no_bar:
     kfree(*hw);
 no_hw:
@@ -208,6 +260,8 @@ no_hw:
 static void release_fa_hw(struct pci_dev *pdev, struct fa_sniffer_hw *hw)
 {
     pci_iounmap(pdev, hw->regs);
+    if (hw->bar4)
+        pci_iounmap(pdev, hw->bar4);
     kfree(hw);
 }
 
@@ -1055,7 +1109,7 @@ static int __devinit fa_sniffer_probe(
     fa_sniffer->fa_entry_count = fa_entry_count;
     pci_set_drvdata(pdev, fa_sniffer);
 
-    rc = initialise_fa_hw(pdev, &fa_sniffer->hw);
+    rc = initialise_fa_hw(pdev, &fa_sniffer->hw, id);
     if (rc < 0)     goto no_hw;
 
     rc = allocate_fa_buffers(pdev, fa_sniffer);
@@ -1120,6 +1174,7 @@ static void __devexit fa_sniffer_remove(struct pci_dev *pdev)
 
 static const struct pci_device_id fa_sniffer_ids[] = {
     { PCI_DEVICE(XILINX_VID, XILINX_DID) },
+    { PCI_DEVICE(SPEC_VID, SPEC_DID) },
     { 0 }
 };
 
