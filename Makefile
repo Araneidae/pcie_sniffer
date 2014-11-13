@@ -34,15 +34,21 @@ clean:
 .PHONY: clean default
 
 
-SIZE=4096
-COUNT=1
-FILE=myfile.bin
+# Used for dd test target
+DD_SIZE = 2048
+DD_COUNT = 1
 
 insmod: $(KBUILD_DIR)/fa_sniffer.ko
-	sudo /sbin/insmod $^
+	sudo sh -c 'echo 7 >/proc/sys/kernel/printk'
+	cp $^ /tmp
+	lsmod | grep -q fa_sniffer && sudo /sbin/rmmod fa_sniffer; true
+	sudo /sbin/insmod /tmp/fa_sniffer.ko
 
 rmmod:
 	sudo /sbin/rmmod fa_sniffer.ko
+
+dd:
+	dd if=/dev/fa_sniffer0 bs=$(DD_SIZE) count=$(DD_COUNT) | hexdump -C
 
 rpmbuild:
 	mkdir rpmbuild
