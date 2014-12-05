@@ -66,6 +66,11 @@ module_param(fa_buffer_count, int, S_IRUGO);
 module_param(fa_entry_count, int, S_IRUGO);
 
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,8,0)
+#define __devinit
+#define __devexit
+#endif
+
 
 /* If test is true then do on_error, print message and goto target. */
 #define TEST_(test, on_error, target, message) \
@@ -607,7 +612,11 @@ static irqreturn_t fa_sniffer_isr(int irq, void *dev_id
 static void start_sniffer(struct fa_sniffer_open *open)
 {
     /* Reset all the dynamic state. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,13,0)
+    reinit_completion(&open->isr_done);
+#else
     INIT_COMPLETION(open->isr_done);
+#endif
     open->buffer_overrun = false;
     open->running = true;
 
