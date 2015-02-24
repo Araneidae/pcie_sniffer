@@ -567,7 +567,7 @@ static irqreturn_t fa_sniffer_isr(int irq, void *dev_id
 
     /* Only on SPEC board we can get unexpected interrupts, so make sure there
      * is a reason for this interrupt. */
-    if (readl(hw->bar4 + R_GPIO_INT_STATUS) == 0)
+    if (hw->bar4  &&  readl(hw->bar4 + R_GPIO_INT_STATUS) == 0)
         return IRQ_NONE;
 
     int status = fa_hw_status(hw);
