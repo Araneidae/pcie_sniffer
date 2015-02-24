@@ -224,9 +224,8 @@ static int setup_spec_lclk(struct fa_sniffer_hw *hw)
 {
     /* Set up GN4121 clock controller to set local clock to 100 MHz. */
     writel(0xE001F07C, hw->bar4 + R_CLK_CSR);
-    /* Need to wait for clock to settle, two reads and prints are enough. */
-    printk(KERN_INFO "CLK_CSR = %08x\n", readl(hw->bar4+R_CLK_CSR));
-    printk(KERN_INFO "CLK_CSR = %08x\n", readl(hw->bar4+R_CLK_CSR));
+    /* Need to wait up to 15ms for clock to settle. */
+    msleep(15);
 
     return get_spec_clocks(hw->regs);
 }
@@ -280,8 +279,7 @@ static int initialise_fa_hw(
         TEST_PTR(rc, bar4, no_bar4, "Cannot find bar 4");
         (*hw)->bar4 = bar4;
 
-        setup_spec_lclk(*hw);
-        rc = get_spec_clocks(regs);
+        rc = setup_spec_lclk(*hw);
         if (rc < 0) goto clock_error;
 
         setup_spec_interrupts(bar4);
