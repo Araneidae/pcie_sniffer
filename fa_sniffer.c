@@ -44,6 +44,7 @@
 #include <linux/interrupt.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
+#include <linux/delay.h>
 
 #include "fa_sniffer.h"
 
