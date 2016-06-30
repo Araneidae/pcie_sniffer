@@ -88,7 +88,7 @@ module_param(fa_entry_count, int, S_IRUGO);
 /* If ptr indicates an error then assign the associated error code to rc, print
  * message and goto target.  If ptr is in fact NULL we return -ENOMEM. */
 #define TEST_PTR(rc, ptr, target, message) \
-    TEST_(IS_ERR(ptr), rc = PTR_ERR(ptr)?:-ENOMEM, target, message)
+    TEST_(IS_ERR_OR_NULL(ptr), rc = PTR_ERR(ptr)?:-ENOMEM, target, message)
 
 
 
