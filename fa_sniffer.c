@@ -135,6 +135,13 @@ module_param(fa_entry_count, int, S_IRUGO);
 #define MAX_CC_CLK_TICKS        8706
 
 
+/* For the development board we only need a small BAR0, but for the SPEC board
+ * we have entries at high addresses so need a large BAR. */
+#define BAR0_LEN_XILINX         4096
+#define BAR0_LEN_SPEC           0x20000
+#define BAR4_LEN                4096
+
+
 
 /* Register map for FA sniffer PCIe interface. */
 struct x5pcie_dma_registers {
@@ -171,10 +178,6 @@ struct fa_sniffer_hw {
     void *bar4;         // Only present on CERN SPEC board
     int tlp_size;   // Max length of single PCI DMA transfer (in bytes)
 };
-
-#define BAR0_LEN_XILINX 1024
-#define BAR0_LEN_SPEC   0x20000
-#define BAR4_LEN        1024
 
 
 static int code2size(int bCode)
@@ -246,17 +249,6 @@ static void setup_spec_interrupts(void *bar4)
 }
 
 
-/* Returns the requested block of bar registers. */
-static void *get_bar(struct pci_dev *dev, int bar, resource_size_t min_size)
-{
-    if (pci_resource_len(dev, bar) < min_size)
-        return ERR_PTR(-EINVAL);
-    else
-        return pci_iomap(dev, bar, min_size);
-}
-
-
-
 static int initialise_fa_hw(
     struct pci_dev *pdev, struct fa_sniffer_hw **hw, bool is_spec_board)
 {
@@ -265,8 +257,13 @@ static int initialise_fa_hw(
     TEST_PTR(rc, *hw, no_hw, "Cannot allocate fa hardware");
 
     struct x5pcie_dma_registers *regs =
-        get_bar(pdev, 0, is_spec_board ? BAR0_LEN_SPEC : BAR0_LEN_XILINX);
+        pci_iomap(pdev, 0, is_spec_board ? BAR0_LEN_SPEC : BAR0_LEN_XILINX);
     TEST_PTR(rc, regs, no_bar, "Cannot find registers");
+    int ver = readl(&regs->dcsr);
+    printk(KERN_INFO "FA sniffer firmware v%d.%02x.%d (%08x)\n",
+        (ver >> 12) & 0xf, (ver >> 4) & 0xff, ver & 0xf, ver);
+    TEST_(ver == 0, rc = -EIO, no_fpga, "FPGA image not loaded");
+
     (*hw)->regs = regs;
     if (is_spec_board)
         (*hw)->tlp_size = 128;
@@ -276,7 +273,7 @@ static int initialise_fa_hw(
     /* Only pick up bar 4 registers from SPEC board. */
     if (is_spec_board)
     {
-        void *bar4 = get_bar(pdev, 4, BAR4_LEN);
+        void *bar4 = pci_iomap(pdev, 4, BAR4_LEN);
         TEST_PTR(rc, bar4, no_bar4, "Cannot find bar 4");
         (*hw)->bar4 = bar4;
 
@@ -287,10 +284,6 @@ static int initialise_fa_hw(
     }
     else
         (*hw)->bar4 = NULL;
-
-    int ver = readl(&regs->dcsr);
-    printk(KERN_INFO "FA sniffer firmware v%d.%02x.%d\n",
-        (ver >> 12) & 0xf, (ver >> 4) & 0xff, ver & 0xf);
 
     /* Now restart the communication controller: needed at present to work
      * around a controller defect. */
@@ -303,6 +296,7 @@ static int initialise_fa_hw(
 clock_error:
     pci_iounmap(pdev, (*hw)->bar4);
 no_bar4:
+no_fpga:
     pci_iounmap(pdev, (*hw)->regs);
 no_bar:
     kfree(*hw);
