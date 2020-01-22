@@ -168,9 +168,9 @@ struct x5pcie_dma_registers {
 };
 
 struct fa_sniffer_hw {
-    struct x5pcie_dma_registers *regs;
-    void *bar4;         // Only present on CERN SPEC board
-    int tlp_size;   // Max length of single PCI DMA transfer (in bytes)
+    struct x5pcie_dma_registers __iomem *regs;
+    void __iomem *bar4;     // Only present on CERN SPEC board
+    int tlp_size;           // Max length of single PCI DMA transfer (in bytes)
 };
 
 
@@ -183,10 +183,10 @@ static int code2size(int bCode)
         return 128 << bCode;
 }
 
-static int DMAGetMaxPacketSize(struct x5pcie_dma_registers *regs)
+static int DMAGetMaxPacketSize(struct x5pcie_dma_registers __iomem *regs)
 {
     /* Read encoded max payload sizes */
-    int dltrsstat = regs->dltrsstat;
+    int dltrsstat = readl(&regs->dltrsstat);
     /* Convert encoded max payload sizes into byte count */
     /* bits [2:0] : Capability maximum payload size for the device */
     int wMaxCapPayload = code2size(dltrsstat);
@@ -197,7 +197,7 @@ static int DMAGetMaxPacketSize(struct x5pcie_dma_registers *regs)
         wMaxCapPayload : wMaxProgPayload;
 }
 
-static int get_spec_clocks(void *bar0)
+static int get_spec_clocks(void __iomem *bar0)
 {
     /* Check that the clock is locked. */
     int status = readl(bar0 + LCLK_LOCKED);
@@ -228,7 +228,7 @@ static int setup_spec_lclk(struct fa_sniffer_hw *hw)
     return get_spec_clocks(hw->regs);
 }
 
-static void setup_spec_interrupts(void *bar4)
+static void setup_spec_interrupts(void __iomem *bar4)
 {
     // Set interrupt line from FPGA (GPIO8) as input
     writel(1<<GPIO_INT_SRC, bar4 + R_GPIO_DIR_MODE);
@@ -267,7 +267,7 @@ static int initialise_fa_hw(
     /* Only pick up bar 4 registers from SPEC board. */
     if (is_spec_board)
     {
-        void *bar4 = pci_iomap(pdev, 4, BAR4_LEN);
+        void __iomem *bar4 = pci_iomap(pdev, 4, BAR4_LEN);
         TEST_PTR(rc, bar4, no_bar4, "Cannot find bar 4");
         (*hw)->bar4 = bar4;
 
@@ -821,7 +821,7 @@ static long halt_sniffer(struct fa_sniffer_open *open)
 static long read_fa_status(struct fa_sniffer_open *open, void __user *result)
 {
     struct fa_sniffer *fa_sniffer = open->fa_sniffer;
-    struct x5pcie_dma_registers *regs = fa_sniffer->hw->regs;
+    struct x5pcie_dma_registers __iomem *regs = fa_sniffer->hw->regs;
 
     long linkstatus = readl(&regs->linkstatus);
     struct fa_status status = {
