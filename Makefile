@@ -40,9 +40,8 @@ DD_COUNT = 1
 
 insmod: $(KBUILD_DIR)/fa_sniffer.ko
 	sudo sh -c 'echo 7 >/proc/sys/kernel/printk'
-	cp $^ /tmp
 	lsmod | grep -q fa_sniffer && sudo /sbin/rmmod fa_sniffer; true
-	sudo /sbin/insmod /tmp/fa_sniffer.ko
+	sudo /sbin/insmod $^
 
 rmmod:
 	sudo /sbin/rmmod fa_sniffer.ko
