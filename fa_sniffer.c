@@ -253,18 +253,20 @@ static int initialise_fa_hw(
     struct x5pcie_dma_registers *regs =
         pci_iomap(pdev, 0, is_spec_board ? BAR0_LEN_SPEC : BAR0_LEN_XILINX);
     TEST_PTR(rc, regs, no_bar, "Cannot find registers");
+    (*hw)->regs = regs;
+
     int ver = readl(&regs->dcsr);
     printk(KERN_INFO "FA sniffer firmware v%d.%02x.%d (%08x)\n",
         (ver >> 12) & 0xf, (ver >> 4) & 0xff, ver & 0xf, ver);
     TEST_(ver == 0, rc = -EIO, no_fpga, "FPGA image not loaded");
 
-    (*hw)->regs = regs;
     if (is_spec_board)
         (*hw)->tlp_size = 128;
     else
         (*hw)->tlp_size = DMAGetMaxPacketSize(regs);
 
     /* Only pick up bar 4 registers from SPEC board. */
+    (*hw)->bar4 = NULL;
     if (is_spec_board)
     {
         void __iomem *bar4 = pci_iomap(pdev, 4, BAR4_LEN);
@@ -276,8 +278,6 @@ static int initialise_fa_hw(
 
         setup_spec_interrupts(bar4);
     }
-    else
-        (*hw)->bar4 = NULL;
 
     /* Now restart the communication controller: needed at present to work
      * around a controller defect. */
