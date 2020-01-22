@@ -67,12 +67,6 @@ module_param(fa_buffer_count, int, S_IRUGO);
 module_param(fa_entry_count, int, S_IRUGO);
 
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,8,0)
-#define __devinit
-#define __devexit
-#endif
-
-
 /* If test is true then do on_error, print message and goto target. */
 #define TEST_(test, on_error, target, message) \
     do if (test) { \
@@ -1154,7 +1148,7 @@ static void fa_sniffer_disable(struct pci_dev *pdev, bool is_spec_board)
 }
 
 
-static int __devinit fa_sniffer_probe(
+static int fa_sniffer_probe(
     struct pci_dev *pdev, const struct pci_device_id *id)
 {
     unsigned int minor;
@@ -1221,7 +1215,7 @@ no_minor:
 }
 
 
-static void __devexit fa_sniffer_remove(struct pci_dev *pdev)
+static void fa_sniffer_remove(struct pci_dev *pdev)
 {
     struct fa_sniffer *fa_sniffer = pci_get_drvdata(pdev);
     unsigned int minor = MINOR(fa_sniffer->cdev.dev);
