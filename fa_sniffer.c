@@ -247,7 +247,7 @@ static int initialise_fa_hw(
     struct pci_dev *pdev, struct fa_sniffer_hw **hw, bool is_spec_board)
 {
     int rc = 0;
-    *hw = kmalloc(sizeof(*hw), GFP_KERNEL);
+    *hw = kmalloc(sizeof(struct fa_sniffer_hw), GFP_KERNEL);
     TEST_PTR(rc, *hw, no_hw, "Cannot allocate fa hardware");
 
     struct x5pcie_dma_registers *regs =
