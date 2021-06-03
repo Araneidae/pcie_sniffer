@@ -654,7 +654,7 @@ static int fa_sniffer_open(struct inode *inode, struct file *file)
         return -EBUSY;
 
     int rc = 0;
-    struct fa_sniffer_open *open = kmalloc(sizeof(*open), GFP_KERNEL);
+    struct fa_sniffer_open *open = kmalloc(sizeof(struct fa_sniffer_open), GFP_KERNEL);
     TEST_PTR(rc, open, no_open, "Unable to allocate open structure");
     file->private_data = open;
 
@@ -1160,7 +1160,7 @@ static int fa_sniffer_probe(
     if (rc < 0)     goto no_sniffer;
 
     struct fa_sniffer *fa_sniffer = kmalloc(
-        sizeof(*fa_sniffer) + fa_buffer_count * sizeof(struct fa_block),
+        sizeof(struct fa_sniffer) + fa_buffer_count * sizeof(struct fa_block),
         GFP_KERNEL);
     TEST_PTR(rc, fa_sniffer, no_memory, "Unable to allocate memory");
 
