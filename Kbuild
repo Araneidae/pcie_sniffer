@@ -7,3 +7,5 @@ EXTRA_CFLAGS += -Wno-missing-field-initializers
 EXTRA_CFLAGS += -DVERSION=$(VERSION)
 
 obj-m += fa_sniffer.o
+
+# vim: set filetype=make:

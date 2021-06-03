@@ -1,5 +1,5 @@
 # Device version.  Advance on each release.
-VERSION = 1.10
+VERSION = 1.11
 RELEASE = 1dkms
 
 
