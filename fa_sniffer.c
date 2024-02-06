@@ -934,7 +934,7 @@ static int allocate_fa_buffers(
          *    Seems that this one returns 0 rather than an error pointer on
          * failure. */
         block->block = (void *) __get_free_pages(
-            GFP_KERNEL | __GFP_COLD, fa_block_shift - PAGE_SHIFT);
+            GFP_KERNEL, fa_block_shift - PAGE_SHIFT);
         TEST_((unsigned long) block->block == 0, rc = -ENOMEM,
             no_block, "Unable to allocate buffer");
 
